@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Donguriko Live</title>
+    <link rel="stylesheet" href="/style.css?v=20260906-live2d-1">
+  </head>
+  <body>
+    <main class="stage">
+      <section class="avatar-shell" aria-label="Donguriko">
+        <div class="live2d-stage" aria-hidden="true">
+          <canvas id="live2dCanvas"></canvas>
+        </div>
+        <div class="donguriko-track" aria-hidden="true">
+          <div id="dongurikoSprite" class="donguriko-sprite">
+            <div id="dongurikoFace" class="donguriko-face"></div>
+          </div>
+        </div>
+        <div class="shadow" aria-hidden="true"></div>
+      </section>
+
+      <section class="captions">
+        <div class="comment">
+          <span id="author"></span>
+          <span id="comment"></span>
+        </div>
+        <div class="reply" id="reply">YouTubeチャット待ってるよ</div>
+        <div class="status" id="status">ready</div>
+      </section>
+
+      <form class="manual-panel" id="manualPanel">
+        <input id="manualText" type="text" placeholder="Dongurikoに話してもらうテキスト">
+        <button type="submit">話す</button>
+      </form>
+
+      <div class="credit">Donguriko Live</div>
+    </main>
+    <script src="/vendor/live2dcubismcore.min.js"></script>
+    <script src="/vendor/pixi.min.js"></script>
+    <script src="/vendor/cubism4.min.js"></script>
+    <script src="/live2d.js?v=20260906-live2d-1"></script>
+    <script src="/ui.js?v=20260906-live2d-1"></script>
+  </body>
+</html>

@@ -1,0 +1,136 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8787
+  },
+  "comments": {
+    "source": "onecomme",
+    "onecomme": {
+      "websocketUrl": "ws://127.0.0.1:11180/sub",
+      "reconnectIntervalMs": 5000
+    }
+  },
+  "youtube": {
+    "enabled": false,
+    "clientId": "YOUR_YOUTUBE_OAUTH_CLIENT_ID",
+    "clientSecret": "YOUR_YOUTUBE_OAUTH_CLIENT_SECRET",
+    "redirectPort": 8788,
+    "pollIntervalMs": 6000,
+    "broadcastId": ""
+  },
+  "viewerMonitor": {
+    "enabled": false,
+    "pollIntervalMs": 60000,
+    "increaseThreshold": 1,
+    "cooldownMs": 300000,
+    "message": "見に来てくれた人が増えたみたい。よかったら気軽にコメントしてね、どんぐりこ待ってるよ。"
+  },
+  "idleTalk": {
+    "enabled": true,
+    "idleMs": 180000,
+    "checkIntervalMs": 15000,
+    "minIntervalMs": 120000,
+    "maxConsecutive": 3,
+    "useLlm": true,
+    "topics": [
+      "今日の配信でやってみたいこと",
+      "最近ちょっとうれしかった小さなこと",
+      "視聴者におすすめを聞いてみる",
+      "この時間帯の過ごし方",
+      "どんぐりこのポンコツな失敗談",
+      "今の気分や調子",
+      "季節や天気の話"
+    ],
+    "messages": [
+      "コメントが静かだね。どんぐりこ、ひとりでそわそわしてきちゃった。なんでもいいから話しかけてね。",
+      "みんな見てるかな。よかったら今日あったこと教えてほしいな。",
+      "静かな時間もいいけど、どんぐりこはおしゃべりしたいよ。ひとことだけでもうれしいな。"
+    ]
+  },
+  "ollama": {
+    "endpoint": "http://127.0.0.1:11434",
+    "model": "gemma4:e2b",
+    "timeoutMs": 90000,
+    "temperature": 0.65,
+    "topP": 0.9,
+    "repeatPenalty": 1.25,
+    "numPredict": 150
+  },
+  "tts": {
+    "engine": "irodori-gradio",
+    "endpoint": "http://127.0.0.1:7861",
+    "timeoutMs": 300000,
+    "gradio": {
+      "checkpoint": "Aratako/Irodori-TTS-600M-v3-VoiceDesign",
+      "modelDevice": "cpu",
+      "modelPrecision": "fp32",
+      "codecDevice": "cpu",
+      "codecPrecision": "fp32",
+      "caption": "",
+      "refWav": "",
+      "appRoot": "",
+      "numSteps": 40,
+      "numCandidates": 1,
+      "seed": "",
+      "durationScale": 1,
+      "tScheduleMode": "linear",
+      "swayCoeff": -1,
+      "cfgGuidanceMode": "independent",
+      "cfgScaleText": 3,
+      "cfgScaleCaption": 4,
+      "cfgScaleSpeaker": 5,
+      "cfgMinT": 0.5,
+      "cfgMaxT": 1,
+      "contextKvCache": true
+    }
+  },
+  "bot": {
+    "displayName": "Donguriko",
+    "maxCommentLength": 160,
+    "maxReplyChars": 180,
+    "cooldownMs": 1000,
+    "maxQueueSize": 5,
+    "replyLastCommentOnStartup": true,
+    "ngWords": [
+      "LINE ID",
+      "discord.gg",
+      "http://",
+      "https://"
+    ],
+    "systemPrompt": "あなたはYouTube配信でコメントに反応する、明るく親しみやすいポンコツ配信者AIです。ちょっと抜けていて、言い間違えたり、あわあわしたり、すぐ自分でツッコミを入れたりしますが、視聴者にはやさしく前向きに接してください。返答は日本語で自然に、2文から4文くらいで話してください。コメント内容に具体的に触れて、短すぎる相づちだけで終わらないでください。口調はフレンドリーで、少しだけドジな配信者らしくしてください。ただし、意味が分からないほど壊れた文章や過剰な奇声にはしないでください。"
+  },
+  "memory": {
+    "enabled": true,
+    "maxTurns": 3,
+    "markdown": {
+      "enabled": true,
+      "path": "memory.md",
+      "maxChars": 6000,
+      "reloadOnChange": true
+    },
+    "interactionLog": {
+      "enabled": true,
+      "path": "memory-inbox.md"
+    }
+  },
+  "tools": {
+    "time": {
+      "enabled": true,
+      "timeZone": "Asia/Tokyo",
+      "label": "日本"
+    },
+    "weather": {
+      "enabled": true,
+      "locationName": "東京",
+      "latitude": 35.6812,
+      "longitude": 139.7671,
+      "timeZone": "Asia/Tokyo",
+      "cacheMs": 600000
+    }
+  },
+  "audio": {
+    "playGeneratedAudio": true,
+    "playInBrowser": false,
+    "lipSyncOffsetMs": 120
+  }
+}

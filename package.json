@@ -1,0 +1,14 @@
+{
+  "name": "youtube-gemma-voicevox",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/app.js",
+    "auth": "node src/app.js --auth-only",
+    "test:local": "node src/app.js --local-test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

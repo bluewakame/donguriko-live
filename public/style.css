@@ -1,0 +1,448 @@
+:root {
+  color-scheme: dark;
+  --text: #fff7f3;
+  --accent: #ffcf67;
+  --sprite-columns: 8;
+  --sprite-rows: 9;
+  --sprite-frame-width: 256px;
+  --sprite-frame-height: 384px;
+  --sprite-scale: 2.35;
+  background: transparent;
+  font-family: "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  background: transparent;
+}
+
+.stage {
+  position: relative;
+  isolation: isolate;
+  width: 100vw;
+  height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(460px, 46vw) 1fr;
+  align-items: end;
+  gap: 28px;
+  padding: 28px 36px;
+  background:
+    linear-gradient(90deg, rgba(13, 27, 17, 0.18), rgba(13, 27, 17, 0.04) 46%, rgba(13, 27, 17, 0.42)),
+    linear-gradient(0deg, rgba(6, 13, 8, 0.36), rgba(6, 13, 8, 0.06) 44%),
+    url("/assets/donguriko-forest.png") center / cover no-repeat;
+}
+
+.stage::before {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  content: "";
+  background:
+    radial-gradient(circle at 31% 84%, rgba(255, 229, 119, 0.24), transparent 22%),
+    linear-gradient(180deg, rgba(9, 19, 12, 0.04), rgba(9, 19, 12, 0.2));
+  pointer-events: none;
+}
+
+.avatar-shell {
+  position: relative;
+  display: grid;
+  place-items: end center;
+  width: min(46vw, 680px);
+  min-width: 460px;
+  height: min(86vh, 760px);
+  justify-self: end;
+  align-self: end;
+}
+
+.donguriko-track {
+  position: absolute;
+  inset: auto 0 5% 0;
+  height: calc(var(--sprite-frame-height) * var(--sprite-scale));
+  overflow: visible;
+}
+
+.donguriko-sprite {
+  position: absolute;
+  left: calc(var(--pet-x, 50) * 1%);
+  bottom: 0;
+  width: var(--sprite-frame-width);
+  height: var(--sprite-frame-height);
+  background-image: url("/assets/donguriko-imagegen-body-spritesheet.webp");
+  background-repeat: no-repeat;
+  background-size: calc(var(--sprite-frame-width) * var(--sprite-columns)) calc(var(--sprite-frame-height) * var(--sprite-rows));
+  background-position: var(--frame-offset-x, 0) var(--frame-offset-y, 0);
+  transform:
+    translateX(-50%)
+    translateY(var(--look-tilt, 0))
+    rotate(0deg)
+    scale(var(--sprite-scale))
+    scaleY(var(--look-squash, 1));
+  transform-origin: 50% 100%;
+  will-change: transform, filter;
+  image-rendering: auto;
+  filter:
+    drop-shadow(0 14px 12px rgba(0, 0, 0, 0.46))
+    drop-shadow(0 0 9px rgba(255, 246, 188, 0.18));
+}
+
+.donguriko-face {
+  position: absolute;
+  left: var(--face-x, 72px);
+  top: var(--face-y, 30px);
+  width: var(--face-size, 112px);
+  height: var(--face-size, 112px);
+  background-image: url("/assets/donguriko-face-neutral-atlas.webp");
+  background-repeat: no-repeat;
+  background-size: calc(var(--face-size, 112px) * 5) calc(var(--face-size, 112px) * 5);
+  background-position: var(--face-offset-x, -224px) var(--face-offset-y, -224px);
+  pointer-events: none;
+  will-change: background-position, background-image;
+}
+
+.donguriko-face.mouth-open {
+  background-image: url("/assets/donguriko-face-mouth-open-atlas.webp");
+}
+
+.donguriko-face.blink {
+  background-image: url("/assets/donguriko-face-blink-atlas.webp");
+}
+
+.donguriko-sprite::after {
+  display: none;
+  content: "";
+}
+
+.donguriko-sprite.speaking {
+  filter:
+    drop-shadow(0 14px 12px rgba(0, 0, 0, 0.48))
+    drop-shadow(0 0 15px rgba(255, 224, 122, 0.34));
+}
+
+.donguriko-sprite.speaking::after {
+  display: none;
+}
+
+.donguriko-sprite.hop {
+  animation: dongurikoHop 760ms ease-in-out;
+}
+
+.shadow {
+  position: absolute;
+  bottom: 2%;
+  width: 44%;
+  height: 3.8%;
+  border-radius: 50%;
+  background: rgba(22, 16, 8, 0.34);
+  filter: blur(8px);
+  animation: shadowFloat 5s ease-in-out infinite;
+}
+
+.captions {
+  align-self: end;
+  max-width: 980px;
+  padding-bottom: 48px;
+  display: grid;
+  gap: 10px;
+}
+
+.comment {
+  min-height: 46px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 12px 16px;
+  border: 1px solid rgba(255, 235, 181, 0.34);
+  border-radius: 8px;
+  background: rgba(22, 34, 19, 0.7);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.28);
+  font-size: 28px;
+  line-height: 1.35;
+  color: #f3ffe2;
+  overflow-wrap: anywhere;
+}
+
+#author {
+  color: #ffe47b;
+  font-weight: 800;
+  margin-right: 12px;
+}
+
+.reply {
+  min-height: 112px;
+  padding: 18px 22px;
+  border: 1px solid rgba(255, 235, 181, 0.36);
+  border-radius: 8px;
+  background: rgba(30, 22, 13, 0.76);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 18px 34px rgba(0, 0, 0, 0.34);
+  font-size: 52px;
+  line-height: 1.22;
+  font-weight: 900;
+  color: #ffffff;
+  overflow-wrap: anywhere;
+}
+
+.status {
+  margin-top: 10px;
+  font-size: 18px;
+  color: rgba(255, 255, 255, 0.72);
+  letter-spacing: 0;
+}
+
+.credit {
+  position: absolute;
+  right: 24px;
+  bottom: 18px;
+  font-size: 22px;
+  font-weight: 800;
+  color: rgba(255, 255, 255, 0.92);
+  text-shadow: 0 3px 0 rgba(0, 0, 0, 0.85), 0 0 12px rgba(0, 0, 0, 0.74);
+  pointer-events: none;
+}
+
+.manual-panel {
+  position: absolute;
+  left: 24px;
+  top: 20px;
+  display: flex;
+  gap: 8px;
+  width: min(520px, calc(100vw - 48px));
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(22, 34, 19, 0.7);
+  backdrop-filter: blur(12px);
+}
+
+.manual-panel input {
+  min-width: 0;
+  flex: 1;
+  height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 6px;
+  padding: 0 12px;
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.1);
+  font: inherit;
+}
+
+.manual-panel button {
+  height: 38px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 16px;
+  color: #22160c;
+  background: var(--accent);
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+body.obs .manual-panel,
+body.vertical .manual-panel {
+  display: none;
+}
+
+body.vertical .stage {
+  display: block;
+  padding: 0;
+}
+
+body.vertical .avatar-shell {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  min-width: 0;
+  height: 100vh;
+  z-index: 1;
+}
+
+body.vertical .donguriko-track {
+  inset: auto 0 0 0;
+  height: 100vh;
+}
+
+body.vertical .donguriko-sprite {
+  --sprite-scale: 2.6;
+  left: 50% !important;
+  bottom: 8vh;
+}
+
+body.vertical .shadow {
+  display: none;
+}
+
+body.vertical .captions {
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  top: 42%;
+  transform: translateY(-50%);
+  z-index: 5;
+  max-width: calc(100vw - 48px);
+  padding-bottom: 0;
+  gap: 12px;
+}
+
+body.vertical .comment {
+  min-height: 0;
+  padding: 12px 16px;
+  font-size: 30px;
+}
+
+body.vertical .reply {
+  min-height: 0;
+  max-height: 30vh;
+  overflow: hidden;
+  padding: 18px 20px;
+  font-size: 48px;
+  line-height: 1.18;
+}
+
+body.vertical .status {
+  width: fit-content;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.46);
+  font-size: 20px;
+  color: rgba(255, 255, 255, 0.86);
+}
+
+body.vertical .credit {
+  right: 22px;
+  bottom: 18px;
+  font-size: 24px;
+}
+
+@keyframes shadowFloat {
+  0%,
+  100% {
+    transform: scaleX(1);
+    opacity: 0.42;
+  }
+  50% {
+    transform: scaleX(0.86);
+    opacity: 0.3;
+  }
+}
+
+@keyframes dongurikoHop {
+  0%,
+  100% {
+    transform:
+      translateX(-50%)
+      translateY(var(--look-tilt, 0))
+      rotate(0deg)
+      scale(var(--sprite-scale))
+      scaleY(var(--look-squash, 1));
+  }
+  45% {
+    transform:
+      translateX(-50%)
+      translateY(calc(var(--look-tilt, 0) - 22px))
+      rotate(0deg)
+      scale(var(--sprite-scale))
+      scaleY(var(--look-squash, 1));
+  }
+}
+
+@keyframes dongurikoMouth {
+  0% {
+    height: 3px;
+    transform: translate(-50%, -50%) scaleY(0.35);
+  }
+  50% {
+    height: 8px;
+    transform: translate(-50%, -50%) scaleY(1);
+  }
+}
+
+@media (max-width: 900px) {
+  .stage {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    padding: 22px;
+  }
+
+  .avatar-shell {
+    width: min(92vw, 520px);
+    min-width: 300px;
+    height: 58vh;
+  }
+
+  .donguriko-sprite {
+    --sprite-scale: 0.78;
+  }
+
+  body.vertical .avatar-shell {
+    height: 100vh;
+  }
+
+  body.vertical .donguriko-track {
+    inset: auto 0 0 0;
+    height: 100vh;
+  }
+
+  body.vertical .donguriko-sprite {
+    --sprite-scale: 2.6;
+    left: 50% !important;
+    bottom: 8vh;
+  }
+
+  .captions {
+    width: 100%;
+    padding-bottom: 42px;
+  }
+
+  .reply {
+    font-size: 36px;
+  }
+
+  .comment {
+    font-size: 22px;
+  }
+
+  .credit {
+    right: 16px;
+    bottom: 12px;
+    font-size: 16px;
+  }
+}
+
+/* ---- Live2D ---- */
+.live2d-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  opacity: 0;
+  transition: opacity 300ms ease;
+  pointer-events: none;
+}
+
+.live2d-stage canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 14px 12px rgba(0, 0, 0, 0.42));
+}
+
+/* モデル読み込み成功時だけLive2Dを出し、スプライト立ち絵は隠す（失敗時は従来表示のまま） */
+body.live2d-ready .live2d-stage {
+  opacity: 1;
+}
+
+body.live2d-ready .donguriko-track {
+  display: none;
+}
+
+body.vertical .live2d-stage {
+  z-index: 2;
+}
