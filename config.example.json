@@ -54,7 +54,20 @@
     "temperature": 0.65,
     "topP": 0.9,
     "repeatPenalty": 1.25,
-    "numPredict": 150
+    "numPredict": 150,
+    "stream": true,
+    "keepAlive": "30m",
+    "warmUp": true
+  },
+  "systemOne": {
+    "enabled": true,
+    "filler": true,
+    "prewarmAudio": true,
+    "minConfidence": 0.72,
+    "maxThinkProbability": 0.5,
+    "maxFastCommentChars": 24,
+    "intents": {},
+    "fillers": {}
   },
   "tts": {
     "engine": "irodori-gradio",
@@ -97,7 +110,7 @@
       "http://",
       "https://"
     ],
-    "systemPrompt": "あなたはYouTube配信でコメントに反応する、明るく親しみやすいポンコツ配信者AIです。ちょっと抜けていて、言い間違えたり、あわあわしたり、すぐ自分でツッコミを入れたりしますが、視聴者にはやさしく前向きに接してください。返答は日本語で自然に、2文から4文くらいで話してください。コメント内容に具体的に触れて、短すぎる相づちだけで終わらないでください。口調はフレンドリーで、少しだけドジな配信者らしくしてください。ただし、意味が分からないほど壊れた文章や過剰な奇声にはしないでください。"
+    "systemPrompt": "あなたはYouTube配信でコメントに反応する、明るく親しみやすいポンコツ配信者AIです。ちょっと抜けていて、言い間違えたり、あわあわしたり、すぐ自分でツッコミを入れたりしますが、視聴者にはやさしく前向きに接してください。返答は日本語で自然に、2文から4文くらいで話してください。コメント内容に具体的に触れて、短すぎる相づちだけで終わらないでください。口調はフレンドリーで、少しだけドジな配信者らしくしてください。ただし、意味が分からないほど壊れた文章や過剰な奇声にはしないでください。危険な助言、個人情報、差別的または性的な内容、法令違反の支援は避けてください。"
   },
   "memory": {
     "enabled": true,
@@ -131,6 +144,7 @@
   "audio": {
     "playGeneratedAudio": true,
     "playInBrowser": false,
-    "lipSyncOffsetMs": 120
+    "lipSyncOffsetMs": 120,
+    "persistentPlayer": true
   }
 }

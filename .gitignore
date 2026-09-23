@@ -1,15 +1,32 @@
-node_modules/
-__pycache__/
-*.pyc
-.venv/
-.npm-cache/
-.expo/
-.env
-.env.*
-!.env.example
-dist/
-out/
-build/
+config.json
+tokens.json
+runtime/
 *.log
-.DS_Store
-Thumbs.db
+node_modules/
+
+# エディタの個人設定
+.obsidian/
+
+# Live2D Cubism Core（公式配布ファイル。再配布が認められていないので各自で入手する）
+public/vendor/live2dcubismcore.min.js
+
+# 配信中のコメントと返答のログ。視聴者名が入るため公開しない
+memory-inbox.md
+
+# Live2D 版を試していたときの旧ファイル
+*.bak-live2d
+
+# 制作途中の元画像・未使用の大きい素材（アプリが読むのは webp と背景だけ）
+public/assets/*.mp4
+public/assets/donguriko-tall-source.png
+public/assets/donguriko-tall-spritesheet.png
+public/assets/donguriko-tall-spritesheet-hd.png
+public/assets/donguriko-tall-spritesheet.webp
+public/assets/donguriko-spritesheet.webp
+public/assets/donguriko-body-only-spritesheet.png
+public/assets/donguriko-body-only-spritesheet.webp
+public/assets/donguriko-imagegen-body-spritesheet.png
+public/assets/donguriko-face-blink.png
+public/assets/donguriko-face-mouth-open.png
+public/assets/donguriko-face-neutral.png
+public/assets/zundamon.png

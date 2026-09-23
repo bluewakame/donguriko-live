@@ -7,7 +7,7 @@ Obsidian は Donguriko の長期記憶管理に向いています。
 このプロジェクトフォルダを Obsidian の Vault として開きます。
 
 ```text
-C:\Users\<YOUR_NAME>\Documents\Codex\2026-05-12\youtube-gemma-voicevox
+（このリポジトリを置いたフォルダ）
 ```
 
 主に使うファイルは 2 つです。

@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/app.js",
     "auth": "node src/app.js --auth-only",
-    "test:local": "node src/app.js --local-test"
+    "test:local": "node src/app.js --local-test",
+    "prewarm": "node src/app.js --prewarm"
   },
   "engines": {
     "node": ">=20"

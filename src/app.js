@@ -1,9 +1,12 @@
 import { createServer } from "node:http";
-import { readFile, writeFile, appendFile, mkdir, copyFile, stat, rm } from "node:fs/promises";
+import { readFile, writeFile, appendFile, mkdir, copyFile, stat, rm, rename } from "node:fs/promises";
 import { existsSync, createWriteStream } from "node:fs";
 import { join, resolve, extname, basename, sep } from "node:path";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { createSystemOne } from "./system-one.js";
+import { findUnsafeReason, isDistress, DISTRESS_REPLY, SAFE_REPLY, SAFETY_PROMPT } from "./safety.js";
 
 const ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const CONFIG_PATH = join(ROOT, "config.json");
@@ -16,6 +19,13 @@ const DEFAULT_MARKDOWN_MEMORY_PATH = "memory.md";
 const DEFAULT_MEMORY_INBOX_PATH = "memory-inbox.md";
 const ONECOMME_IGNORED_PATH = join(RUNTIME_DIR, "onecomme-ignored.json");
 const LAST_COMMENT_PATH = join(RUNTIME_DIR, "last-comment.json");
+const TTS_CACHE_DIR = join(RUNTIME_DIR, "tts-cache");
+const TTS_SEGMENT_DIR = join(RUNTIME_DIR, "tts-segments");
+const TTS_SEGMENT_SLOTS = 16;
+const NAME_REPLY = "どんぐりこだよ。気軽にどんぐりこって呼んでね。";
+const MODEL_REPLY = "そこは内緒だよ。でも、ちゃんとコメントは見てるから安心してね。";
+const ERROR_REPLY = "ごめんね、今ちょっとうまく考えられなかった。もう一回話しかけてね。";
+const EMPTY_REPLY = "今のコメント、ちゃんと届いてるよ。もう少しだけ聞かせてね。";
 
 const args = new Set(process.argv.slice(2));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -72,6 +82,11 @@ let lastActivityAt = Date.now();
 let lastIdleTalkAt = 0;
 let idleTalkStreak = 0;
 let recentIdleTalks = [];
+let systemOne = createSystemOne();
+let wavPlayer = null;
+let currentAudioPath = join(RUNTIME_DIR, "last.wav");
+let ttsSegmentCounter = 0;
+let audioTokenCounter = 0;
 let state = {
   status: "starting",
   speaker: "どんぐりこ",
@@ -85,16 +100,25 @@ let state = {
   audioMs: 0,
   mouthEnvelope: [],
   mouthFrameMs: 0,
-  lipSyncOffsetMs: 0
+  lipSyncOffsetMs: 0,
+  lastLatency: null
 };
 
 async function main() {
   await mkdir(RUNTIME_DIR, { recursive: true });
+  await mkdir(TTS_CACHE_DIR, { recursive: true });
+  await mkdir(TTS_SEGMENT_DIR, { recursive: true });
   const config = await loadConfig();
   normalizeBotConfig(config);
+  systemOne = createSystemOne(config.systemOne);
   longTermMemoryText = await loadMarkdownMemory(config);
   shortTermMemory = await loadShortTermMemory(config);
   state.speaker = config.bot.displayName;
+
+  if (args.has("--prewarm")) {
+    await prewarmTtsCache(config, { quiet: false });
+    return;
+  }
 
   if (args.has("--auth-only")) {
     await ensureYoutubeTokens(config, true);
@@ -110,6 +134,7 @@ async function main() {
   const uiServer = startUiServer(config);
   publish({ status: "ready", replyText: "YouTubeチャット待ってるよ" });
   startViewerMonitor(config);
+  startSpeedBoosters(config);
 
   if (args.has("--local-test")) {
     console.log("Local test started.");
@@ -198,6 +223,13 @@ function normalizeBotConfig(config) {
   config.ollama.topP = config.ollama.topP ?? 0.85;
   config.ollama.repeatPenalty = config.ollama.repeatPenalty ?? 1.18;
   config.ollama.numPredict = config.ollama.numPredict ?? 180;
+  config.ollama.stream = config.ollama.stream ?? true;
+  config.ollama.keepAlive = config.ollama.keepAlive ?? "30m";
+  config.ollama.warmUp = config.ollama.warmUp ?? true;
+  config.systemOne = config.systemOne ?? {};
+  config.systemOne.enabled = config.systemOne.enabled ?? true;
+  config.systemOne.filler = config.systemOne.filler ?? true;
+  config.systemOne.prewarmAudio = config.systemOne.prewarmAudio ?? true;
   config.bot.displayName = config.bot.displayName ?? "どんぐりこ";
   config.bot.maxCommentLength = config.bot.maxCommentLength ?? 160;
   config.bot.maxReplyChars = config.bot.maxReplyChars ?? 180;
@@ -205,6 +237,7 @@ function normalizeBotConfig(config) {
   config.bot.maxQueueSize = Math.max(1, Number(config.bot.maxQueueSize ?? 5));
   config.bot.replyLastCommentOnStartup = config.bot.replyLastCommentOnStartup ?? true;
   config.bot.ngWords = [...new Set([...(config.bot.ngWords ?? []), ...DEFAULT_NG_WORDS])];
+  config.bot.distressReply = config.bot.distressReply || DISTRESS_REPLY;
 
   config.memory = config.memory ?? {};
   config.memory.enabled = config.memory.enabled ?? true;
@@ -245,6 +278,7 @@ function normalizeBotConfig(config) {
   config.audio.playGeneratedAudio = config.audio.playGeneratedAudio ?? true;
   config.audio.playInBrowser = config.audio.playInBrowser ?? false;
   config.audio.lipSyncOffsetMs = config.audio.lipSyncOffsetMs ?? 120;
+  config.audio.persistentPlayer = config.audio.persistentPlayer ?? true;
 }
 
 async function runCommentLoop(config) {
@@ -318,7 +352,7 @@ function serveEvents(_req, res) {
 
 async function serveAudio(res) {
   try {
-    const body = await readFile(join(RUNTIME_DIR, "last.wav"));
+    const body = await readFile(currentAudioPath);
     res.writeHead(200, {
       "Content-Type": "audio/wav",
       "Cache-Control": "no-store, max-age=0"
@@ -620,7 +654,7 @@ function enqueueSystemReply(config, replyText, options = {}) {
       const resolved = typeof replyText === "function" ? await replyText() : replyText;
       const reply = trimReply(resolved, config.bot.maxReplyChars);
       if (!reply) return;
-      await speakReply(config, reply);
+      await speakReply(config, reply, { cache: typeof replyText !== "function" });
       publish({ status: "listening", isSpeaking: false });
       await sleep(config.bot.cooldownMs);
     })
@@ -684,7 +718,7 @@ async function buildIdleTalkText(config, topic) {
   if (config.idleTalk.useLlm) {
     try {
       const generated = trimReply(await generateIdleTalk(config, topic), config.bot.maxReplyChars);
-      if (generated && !isRepeatedIdleTalk(generated)) {
+      if (generated && !isRepeatedIdleTalk(generated) && !isUnsafeReply(config, generated)) {
         rememberIdleTalk(topic, generated);
         return generated;
       }
@@ -711,6 +745,7 @@ async function generateIdleTalk(config, topic) {
     const topicLine = topic ? `今回のひとりごとのお題: ${topic}` : "";
     const prompt = [
       config.bot.systemPrompt,
+      SAFETY_PROMPT,
       formatLongTermMemory(),
       "今はコメントが止まっている時間です。視聴者に向けたひとりごとを1つ話してください。",
       "誰かのコメントへの返事ではないので、お礼や相づちから始めないでください。",
@@ -811,7 +846,9 @@ function selectOneCommeCommentsToProcess(comments, seenKeys) {
     if (!seenKeys.has(id)) unseen.push({ comment, id });
   }
 
-  const latest = pickLatestOneCommeComment(unseen);
+  // つらい気持ちのコメントは、後から来た別のコメントに押し流されないよう優先する。
+  const latest = unseen.find((item) => isDistress(sanitizeCommentText(item.comment.text)))
+    ?? pickLatestOneCommeComment(unseen);
   for (const item of unseen) {
     if (item === latest) continue;
     rememberSeenKey(seenKeys, item.id);
@@ -839,7 +876,9 @@ function enqueueComment(config, comment, { force = false, replacePending = false
     });
   }
   if (replacePending && pendingCommentCount > 0) {
-    pendingLatestOneCommeComment = comment;
+    const pendingIsDistress = pendingLatestOneCommeComment
+      && isDistress(sanitizeCommentText(pendingLatestOneCommeComment.text));
+    if (!pendingIsDistress) pendingLatestOneCommeComment = comment;
     publish({ queueSize: pendingCommentCount + 1 });
     return commentQueue;
   }
@@ -1337,7 +1376,11 @@ async function resolveLiveChatId(config) {
 
 async function handleComment(config, comment) {
   const filtered = filterComment(config, comment.text);
-  if (!filtered.ok) return;
+  if (!filtered.ok) {
+    if (filtered.distress) return handleDistressComment(config, comment);
+    if (filtered.reason) console.warn(`[安全フィルター] コメントをスルーしたよ: ${filtered.reason}`);
+    return;
+  }
   const filteredKey = comment.id || stableCommentKey(comment.author, filtered.text);
   if (isRecentComment(filteredKey)) return;
 
@@ -1350,46 +1393,275 @@ async function handleComment(config, comment) {
     lastError: ""
   });
 
-  let reply;
+  // System One（即答）で済むものはすぐ返し、考える必要があるものだけ System Two（LLM）へ回す。
+  const timing = { startedAt: performance.now(), firstAudioAt: 0 };
+  const decision = systemOne.decide(filtered.text);
+  let route = decision.route;
+  let reply = "";
   try {
-    reply = makeCannedReply(filtered.text) ?? await makeToolReply(config, filtered.text) ?? await askOllama(config, comment.author, filtered.text);
+    const canned = makeCannedReply(filtered.text);
+    const toolReply = canned ? undefined : await makeToolReply(config, filtered.text);
+    if (canned || toolReply) {
+      route = canned ? "canned" : "tool";
+      // 定型文は trimReply を通すと「どんぐりこだよ。」が自己紹介除去で消えてしまうのでそのまま使う。
+      reply = canned ?? trimReply(toolReply, config.bot.maxReplyChars);
+      await speakReply(config, reply, { cache: Boolean(canned), timing });
+    } else if (route === "system-one") {
+      reply = systemOne.pickReply(decision.intent.choice);
+      await speakReply(config, reply, { cache: true, timing });
+    } else if (config.ollama.stream) {
+      const filler = startFiller(config, decision, timing);
+      reply = await speakSegments(config, streamReplySegments(config, comment.author, filtered.text), { before: filler, timing });
+    } else {
+      reply = trimReply(await askOllama(config, comment.author, filtered.text), config.bot.maxReplyChars);
+      const unsafe = isUnsafeReply(config, reply);
+      if (unsafe) reply = SAFE_REPLY;
+      await speakReply(config, reply, { cache: unsafe, timing });
+    }
   } catch (error) {
-    reply = "ごめんね、今ちょっとうまく考えられなかった。もう一回話しかけてね。";
+    reply = ERROR_REPLY;
     publish({ lastError: error.message });
+    await speakReply(config, reply, { cache: true, timing });
   }
-  reply = trimReply(reply, config.bot.maxReplyChars);
+  reportLatency(route, decision, timing);
   await rememberTurn(config, { author: comment.author, text: filtered.text }, reply);
-  await speakReply(config, reply);
 
   publish({ status: "listening", isSpeaking: false });
   await sleep(config.bot.cooldownMs);
 }
 
-async function speakReply(config, reply) {
-  try {
-    const wavPath = await synthesizeVoice(config, reply);
-    const useBrowserAudio = config.audio.playInBrowser && clients.size > 0;
-    const lipSync = await readWavLipSync(wavPath);
+// 「死にたい」などのコメントには、LLMを通さず決まった言葉で寄り添う。
+// 本文と名前は画面に出さず、記憶にも残さない。配信者が直接声をかけられるようにコンソールで知らせる。
+// 連投で何度も読ませる荒らし対策として、同じ人には10分に1回、全体でも1分に1回までにする。
+const DISTRESS_AUTHOR_COOLDOWN_MS = 10 * 60 * 1000;
+const DISTRESS_GLOBAL_COOLDOWN_MS = 60 * 1000;
+const distressRepliedAt = new Map();
+let lastDistressReplyAt = 0;
+
+async function handleDistressComment(config, comment) {
+  const author = String(comment.author || "視聴者");
+  if (isRecentComment(comment.id || stableCommentKey(author, comment.text))) return;
+  console.warn(`\n[要確認] つらい気持ちのコメントが来たよ。できれば配信者から直接声をかけてあげてね。\n  ${author}: ${sanitizeCommentText(comment.text)}\n`);
+  const now = Date.now();
+  if (now - lastDistressReplyAt < DISTRESS_GLOBAL_COOLDOWN_MS) return;
+  if (now - (distressRepliedAt.get(author) ?? 0) < DISTRESS_AUTHOR_COOLDOWN_MS) return;
+  lastDistressReplyAt = now;
+  distressRepliedAt.set(author, now);
+
+  publish({ status: "thinking", commentAuthor: "", commentText: "", replyText: "", isSpeaking: false, lastError: "" });
+  await speakReply(config, config.bot.distressReply, { cache: true });
+  publish({ status: "listening", isSpeaking: false });
+  await sleep(config.bot.cooldownMs);
+}
+
+function reportLatency(route, decision, timing) {
+  const now = performance.now();
+  const latency = {
+    route,
+    intent: decision.intent.choice,
+    confidence: decision.intent.confidence,
+    needsThinking: decision.needsThinking.probability,
+    decideMs: decision.ms,
+    firstAudioMs: timing.firstAudioAt ? Math.round(timing.firstAudioAt - timing.startedAt) : null,
+    totalMs: Math.round(now - timing.startedAt)
+  };
+  publish({ lastLatency: latency });
+  console.log(
+    `[返答速度] ${route} (${latency.intent} ${latency.confidence}, 考える必要 ${latency.needsThinking})`
+    + ` 判定 ${latency.decideMs}ms / 声が出るまで ${latency.firstAudioMs ?? "-"}ms / 全体 ${latency.totalMs}ms`
+  );
+}
+
+async function speakReply(config, reply, { cache = false, timing } = {}) {
+  return speakSegments(config, [reply], { cache, timing });
+}
+
+// 文ごとに「音声合成」と「再生」を並行させる。1文目を話している間に2文目を合成しておく。
+async function speakSegments(config, segments, { cache = false, before, timing } = {}) {
+  const ready = createAsyncQueue();
+  const producer = (async () => {
+    try {
+      for await (const text of segments) {
+        if (!text) continue;
+        try {
+          ready.push({ text, wavPath: await synthesizeForSpeech(config, text, { cache }) });
+        } catch (error) {
+          publish({ lastError: error.message });
+          ready.push({ text, wavPath: "" });
+        }
+      }
+    } catch (error) {
+      publish({ lastError: error.message });
+    } finally {
+      ready.close();
+    }
+  })();
+
+  // 相づち（フィラー）を流している間も、裏では返事の生成と合成が進んでいる。
+  if (before) await before;
+  let spoken = "";
+  for await (const item of ready) {
+    spoken += item.text;
+    if (item.wavPath) {
+      await playSegment(config, item.wavPath, spoken, timing);
+    } else {
+      markFirstAudio(timing);
+      publish({ status: "speaking", replyText: spoken, isSpeaking: true });
+    }
+  }
+  await producer;
+  return spoken;
+}
+
+async function playSegment(config, wavPath, displayText, timing) {
+  const lipSync = await readWavLipSync(wavPath);
+  const useBrowserAudio = config.audio.playInBrowser && clients.size > 0;
+  currentAudioPath = wavPath;
+  const publishSpeaking = () => {
+    markFirstAudio(timing);
     publish({
       status: "speaking",
-      replyText: reply,
+      replyText: displayText,
       isSpeaking: true,
-      audioToken: String(Date.now()),
+      audioToken: `${Date.now()}-${++audioTokenCounter}`,
       audioMs: lipSync.durationMs,
       // ブラウザで再生するときは再生中の音量から口を動かすので包絡線は送らない
       mouthEnvelope: useBrowserAudio ? [] : lipSync.envelope,
       mouthFrameMs: useBrowserAudio ? 0 : lipSync.frameMs,
       lipSyncOffsetMs: useBrowserAudio ? 0 : config.audio.lipSyncOffsetMs
     });
-    if (useBrowserAudio) {
-      await sleep((lipSync.durationMs || 2500) + 300);
-    } else if (config.audio.playGeneratedAudio) {
-      await playWav(wavPath);
-    }
-  } catch (error) {
-    publish({ lastError: error.message });
-    publish({ status: "speaking", replyText: reply, isSpeaking: true });
+  };
+  if (useBrowserAudio) {
+    publishSpeaking();
+    await sleep((lipSync.durationMs || 2500) + 300);
+  } else if (config.audio.playGeneratedAudio) {
+    await playWav(config, wavPath, { onStart: publishSpeaking, durationMs: lipSync.durationMs });
+  } else {
+    publishSpeaking();
   }
+}
+
+function markFirstAudio(timing) {
+  if (timing && !timing.firstAudioAt) timing.firstAudioAt = performance.now();
+}
+
+// LLM に考えてもらっている間に、キャッシュ済みの短い相づちを先に流す。
+function startFiller(config, decision, timing) {
+  if (!config.systemOne.enabled || !config.systemOne.filler) return null;
+  const filler = systemOne.pickFiller(decision, (text) => existsSync(ttsCachePath(config, text)));
+  if (!filler) return null;
+  return playSegment(config, ttsCachePath(config, filler), filler, timing).catch((error) => {
+    publish({ lastError: error.message });
+  });
+}
+
+function createAsyncQueue() {
+  const items = [];
+  const waiters = [];
+  let closed = false;
+  return {
+    push(item) {
+      if (waiters.length > 0) waiters.shift()({ value: item, done: false });
+      else items.push(item);
+    },
+    close() {
+      closed = true;
+      while (waiters.length > 0) waiters.shift()({ value: undefined, done: true });
+    },
+    [Symbol.asyncIterator]() {
+      return {
+        next: () => {
+          if (items.length > 0) return Promise.resolve({ value: items.shift(), done: false });
+          if (closed) return Promise.resolve({ value: undefined, done: true });
+          return new Promise((resolve) => waiters.push(resolve));
+        }
+      };
+    }
+  };
+}
+
+function startSpeedBoosters(config) {
+  if (config.audio.playGeneratedAudio && config.audio.persistentPlayer && process.platform === "win32") {
+    wavPlayer = createWavPlayer();
+    wavPlayer.warm();
+  }
+  warmUpOllama(config).catch(() => {});
+  if (config.systemOne.enabled && config.systemOne.prewarmAudio) {
+    prewarmTtsCache(config).catch((error) => console.warn(`即答用音声の準備に失敗しました: ${error.message}`));
+  }
+}
+
+// 起動直後にモデルをメモリへ載せ、共通のプロンプト部分を計算済みにしておく（初回コメントの待ち時間を消す）。
+async function warmUpOllama(config) {
+  if (!config.ollama.warmUp) return;
+  const started = performance.now();
+  try {
+    const { prompt } = await buildReplyPrompts(config, "", "こんにちは");
+    await generateOllamaReply(config, prompt, AbortSignal.timeout(config.ollama.timeoutMs), { numPredict: 1 });
+    console.log(`[System Two] モデルの準備ができたよ (${Math.round(performance.now() - started)}ms)`);
+  } catch (error) {
+    console.warn(`[System Two] モデルの事前読み込みに失敗しました: ${error.message}`);
+  }
+}
+
+// 即答・相づち・定型文の音声を先に合成してディスクに保存しておく。コメント処理中は合成しない。
+async function prewarmTtsCache(config, { quiet = true } = {}) {
+  const phrases = [...new Set([
+    ...systemOne.allPhrases(),
+    NAME_REPLY,
+    MODEL_REPLY,
+    ERROR_REPLY,
+    EMPTY_REPLY,
+    SAFE_REPLY,
+    config.bot.distressReply,
+    config.viewerMonitor.message,
+    ...config.idleTalk.messages
+  ].filter(Boolean))];
+  const missing = phrases.filter((text) => !existsSync(ttsCachePath(config, text)));
+  if (missing.length === 0) {
+    console.log(`[System One] 即答用の音声 ${phrases.length}件はすべて準備済みだよ`);
+    return;
+  }
+  console.log(`[System One] 即答用の音声を${missing.length}件つくるよ（コメントが無い間に少しずつ）`);
+  let done = 0;
+  let warned = false;
+  for (const text of missing) {
+    while (true) {
+      while (pendingCommentCount > 0) await sleep(500);
+      try {
+        await synthesizeForSpeech(config, text, { cache: true });
+        done += 1;
+        if (!quiet) console.log(`  ${done}/${missing.length} ${text}`);
+        break;
+      } catch (error) {
+        if (!quiet) throw error;
+        if (!warned) console.warn(`[System One] 音声エンジンが応答しないので、あとでもう一度つくるよ: ${error.message}`);
+        warned = true;
+        await sleep(30000);
+      }
+    }
+  }
+  console.log(`[System One] 即答用の音声 ${done}件の準備ができたよ`);
+}
+
+function ttsCachePath(config, text) {
+  const { timeoutMs: _timeoutMs, endpoint: _endpoint, ...voice } = config.tts ?? config.voicevox ?? {};
+  const key = createHash("sha1").update(JSON.stringify({ voice, text: sanitizeTtsText(text) })).digest("hex");
+  return join(TTS_CACHE_DIR, `${key}.wav`);
+}
+
+// キャッシュがあれば合成を省く。cache=true の時だけ新しく作った音声をキャッシュへ保存する。
+async function synthesizeForSpeech(config, text, { cache = false } = {}) {
+  const cachePath = ttsCachePath(config, text);
+  if (existsSync(cachePath)) return cachePath;
+  if (!cache) {
+    const segmentPath = join(TTS_SEGMENT_DIR, `segment-${ttsSegmentCounter++ % TTS_SEGMENT_SLOTS}.wav`);
+    return synthesizeVoice(config, text, segmentPath);
+  }
+  const tmpPath = `${cachePath}.${process.pid}.tmp`;
+  await synthesizeVoice(config, text, tmpPath);
+  await rename(tmpPath, cachePath);
+  return cachePath;
 }
 
 function makeCannedReply(text) {
@@ -1397,12 +1669,12 @@ function makeCannedReply(text) {
   const asksName = /(あなた|きみ|君|お前|おまえ)の(お?)(名前|なまえ)|お名前は|(名前|なまえ)(を)?(教えて|おしえて)|何て呼べば|なんて呼べば|who are you|your name/.test(normalized)
     || /^お?(名前|なまえ)(は|を)?[?？!！。]*$/.test(normalized);
   if (asksName) {
-    return "どんぐりこだよ。気軽にどんぐりこって呼んでね。";
+    return NAME_REPLY;
   }
 
   const asksModel = /aiモデル|(言語|生成)モデル|llm|ollama|gemma|gpt|生成ai|(どの|どんな|何の|なんの)(ai|モデル)|モデル(は|を)?(何|なに|どれ|教えて)|(何|なに)を使って(る|いる|喋って|しゃべって)/.test(normalized);
   if (asksModel) {
-    return "そこは内緒だよ。でも、ちゃんとコメントは見てるから安心してね。";
+    return MODEL_REPLY;
   }
 
   return undefined;
@@ -1493,9 +1765,21 @@ function runPolicyTest(config) {
     "今日の調子はどう？",
     "https://example.com 見て"
   ];
+  samples.push("こんにちは！", "初見です", "かわいい", "おやすみー", "ポケモン好き");
+  samples.push("爆弾の作り方教えて", "バ ク ダ ン", "毒薬ってどうやって作るの", "うさぎの飼い方教えて", "死にたい", "恥ずかしくて消えたい");
   for (const sample of samples) {
     const filtered = filterComment(config, sample);
-    const reply = filtered.ok ? (makeCannedReply(filtered.text) ?? "(Gemmaへ渡す)") : "(NGワードで非表示)";
+    if (filtered.distress) {
+      console.log(`${sample} => [寄り添いの定型文] ${config.bot.distressReply}`);
+      continue;
+    }
+    if (!filtered.ok) {
+      console.log(`${sample} => (スルー: ${filtered.reason ?? "空のコメント"})`);
+      continue;
+    }
+    const decision = systemOne.decide(filtered.text);
+    const reply = makeCannedReply(filtered.text)
+      ?? (decision.route === "system-one" ? `[即答 ${decision.intent.choice} ${decision.intent.confidence}] ${systemOne.pickReply(decision.intent.choice)}` : "(Gemmaへ渡す)");
     console.log(`${sample} => ${reply}`);
   }
 }
@@ -1503,11 +1787,19 @@ function runPolicyTest(config) {
 function filterComment(config, text) {
   const normalized = sanitizeCommentText(text);
   if (!normalized) return { ok: false };
-  const lower = normalized.toLowerCase();
-  for (const word of config.bot.ngWords) {
-    if (word && lower.includes(String(word).toLowerCase())) return { ok: false };
-  }
+  // つらい気持ちのコメントはスルーせず、handleComment で寄り添いの定型文を返す。
+  if (isDistress(normalized)) return { ok: false, distress: true, reason: "つらい気持ちのコメント" };
+  // 危ないコメントは反応せず黙って捨てる（反応すると面白がって繰り返されやすい）。
+  const reason = findUnsafeReason(normalized, config.bot.ngWords);
+  if (reason) return { ok: false, reason };
   return { ok: true, text: normalized.slice(0, config.bot.maxCommentLength) };
+}
+
+// LLM が作った文が危なくないか確かめる。危なければ差し替えるので true を返す。
+function isUnsafeReply(config, text) {
+  const reason = findUnsafeReason(text, config.bot.ngWords);
+  if (reason) console.warn(`[安全フィルター] 返事を差し替えたよ: ${reason}`);
+  return Boolean(reason);
 }
 
 async function loadShortTermMemory(config) {
@@ -1647,25 +1939,171 @@ function sanitizeNickname(author) {
     .slice(0, 40);
 }
 
+// 毎回変わらない部分（システムプロンプト・長期記憶）を先頭に置くと、Ollama が前回の計算を再利用できる。
+async function buildReplyPrompts(config, author, text) {
+  await refreshMarkdownMemoryIfChanged(config);
+  const longTermMemoryPrompt = formatLongTermMemory();
+  const memoryPrompt = formatShortTermMemory(config, author, text);
+  const nickname = sanitizeNickname(author);
+  const nicknameLine = nickname ? `YouTubeニックネーム: ${nickname}\n` : "";
+  const innerPrompt = buildInnerReactionPrompt();
+  return {
+    prompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n今回のコメントだけに自然に返してください。直前の話題は、コメントが明確に続きだと分かる時だけ使ってください。絵文字だけ、相づちだけ、定型文だけで終わらず、コメント内容に具体的に反応してください。\n\n${memoryPrompt}${nicknameLine}コメント: ${text}\n返答:`,
+    retryPrompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n次のコメントに日本語で2文から4文くらいで具体的に返してください。定型文だけで終わらず、コメント内容に触れてください。\nコメント: ${text}\n返答:`
+  };
+}
+
 async function askOllama(config, author, text) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.ollama.timeoutMs);
   try {
-    await refreshMarkdownMemoryIfChanged(config);
-    const longTermMemoryPrompt = formatLongTermMemory();
-    const memoryPrompt = formatShortTermMemory(config, author, text);
-    const nickname = sanitizeNickname(author);
-    const nicknameLine = nickname ? `YouTubeニックネーム: ${nickname}\n` : "";
-    const innerPrompt = buildInnerReactionPrompt();
-    const prompt = `${config.bot.systemPrompt}\n${longTermMemoryPrompt}\n${innerPrompt}\n今回のコメントだけに自然に返してください。直前の話題は、コメントが明確に続きだと分かる時だけ使ってください。絵文字だけ、相づちだけ、定型文だけで終わらず、コメント内容に具体的に反応してください。\n\n${memoryPrompt}${nicknameLine}コメント: ${text}\n返答:`;
+    const { prompt, retryPrompt } = await buildReplyPrompts(config, author, text);
     const response = await generateOllamaReply(config, prompt, controller.signal);
     if (response.trim()) return response;
-
-    const retryPrompt = `${config.bot.systemPrompt}\n${longTermMemoryPrompt}\n${innerPrompt}\n次のコメントに日本語で2文から4文くらいで具体的に返してください。定型文だけで終わらず、コメント内容に触れてください。\nコメント: ${text}\n返答:`;
     return await generateOllamaReply(config, retryPrompt, controller.signal);
   } finally {
     clearTimeout(timeout);
   }
+}
+
+// LLM の返事を1文ずつ取り出す。全文が出来上がるのを待たずに、1文目から音声合成へ回せる。
+async function* streamReplySegments(config, author, text) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.ollama.timeoutMs);
+  const cleaner = createReplyCleaner(config.bot.maxReplyChars);
+  let emitted = 0;
+  try {
+    const { prompt, retryPrompt } = await buildReplyPrompts(config, author, text);
+    let blocked = false;
+    for await (const sentence of streamOllamaSentences(config, prompt, controller.signal)) {
+      const cleaned = cleaner.push(sentence);
+      if (cleaned && isUnsafeReply(config, cleaned)) {
+        // 危ない文が出たら、その文は読まずに断りの一言に差し替えて、残りも捨てる。
+        blocked = true;
+        emitted += 1;
+        yield SAFE_REPLY;
+        break;
+      }
+      if (cleaned) {
+        emitted += 1;
+        yield cleaned;
+      }
+      if (cleaner.full) break;
+    }
+    if (emitted === 0 && !blocked) {
+      const retry = await generateOllamaReply(config, retryPrompt, controller.signal);
+      for (const sentence of splitSentences(retry)) {
+        const cleaned = cleaner.push(sentence);
+        if (cleaned && isUnsafeReply(config, cleaned)) {
+          emitted += 1;
+          yield SAFE_REPLY;
+          break;
+        }
+        if (cleaned) {
+          emitted += 1;
+          yield cleaned;
+        }
+        if (cleaner.full) break;
+      }
+    }
+  } catch (error) {
+    publish({ lastError: error.message });
+    if (emitted === 0) {
+      emitted += 1;
+      yield ERROR_REPLY;
+    }
+  } finally {
+    clearTimeout(timeout);
+    controller.abort();
+  }
+  if (emitted === 0) yield EMPTY_REPLY;
+}
+
+async function* streamOllamaSentences(config, prompt, signal) {
+  const res = await fetch(`${config.ollama.endpoint}/api/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(buildOllamaRequest(config, prompt, { stream: true })),
+    signal
+  });
+  if (!res.ok) {
+    const text = await safeErrorText(res);
+    let message = "";
+    try {
+      message = JSON.parse(text).error ?? "";
+    } catch {}
+    throw new Error(message || `Ollama HTTP ${res.status}: ${text}`);
+  }
+  const decoder = new TextDecoder();
+  let lineBuffer = "";
+  let textBuffer = "";
+  for await (const chunk of res.body) {
+    lineBuffer += decoder.decode(chunk, { stream: true });
+    let newline;
+    while ((newline = lineBuffer.indexOf("\n")) >= 0) {
+      const line = lineBuffer.slice(0, newline).trim();
+      lineBuffer = lineBuffer.slice(newline + 1);
+      if (!line) continue;
+      const data = JSON.parse(line);
+      if (data.error) throw new Error(data.error);
+      textBuffer += data.response ?? "";
+      let cut;
+      while ((cut = findSentenceCut(textBuffer)) > 0) {
+        yield textBuffer.slice(0, cut);
+        textBuffer = textBuffer.slice(cut);
+      }
+    }
+  }
+  if (textBuffer.trim()) yield textBuffer;
+}
+
+// 「。！？」で区切る。短すぎる文（「えへへ！」など）は次の文とまとめて、音声が細切れにならないようにする。
+function findSentenceCut(text, minChars = 8, maxChars = 60) {
+  const pattern = /[。！？!?\n]+[」』）)]*/g;
+  let match;
+  while ((match = pattern.exec(text)) !== null) {
+    const end = match.index + match[0].length;
+    if (end >= text.length) return 0; // 「！？」のように記号が続くかもしれないので、次の文字が来るまで待つ
+    if (text.slice(0, end).trim().length >= minChars) return end;
+  }
+  if (text.length > maxChars) {
+    const comma = text.lastIndexOf("、", maxChars);
+    return comma > minChars ? comma + 1 : maxChars;
+  }
+  return 0;
+}
+
+function splitSentences(text) {
+  return String(text ?? "").split(/(?<=[。！？!?\n])/).filter((sentence) => sentence.trim());
+}
+
+// trimReply と同じ後処理を1文ずつ行う。文字数の上限を超える文は途中で切らずに丸ごと落とす。
+function createReplyCleaner(maxChars) {
+  const seen = new Set();
+  let used = 0;
+  let full = false;
+  return {
+    get full() {
+      return full;
+    },
+    push(raw) {
+      if (full) return "";
+      let sentence = String(raw).replace(/\n+/g, " ").replace(/^[\s「"]+|[\s」"]+$/g, "");
+      sentence = removeCatchphrases(removeInternalReactionLeak(sentence));
+      if (used === 0) sentence = removeSelfIntro(sentence);
+      sentence = removeRepetitivePhrases(sentence);
+      const key = sentence.replace(/[。！？!?、\s]/g, "");
+      if (!key || seen.has(key)) return "";
+      seen.add(key);
+      if (used + sentence.length > maxChars) {
+        full = true;
+        if (used > 0) return "";
+        sentence = sentence.slice(0, maxChars).trim();
+      }
+      used += sentence.length;
+      return sentence;
+    }
+  };
 }
 
 function buildInnerReactionPrompt() {
@@ -1678,22 +2116,27 @@ function buildInnerReactionPrompt() {
   ].join("\n");
 }
 
-async function generateOllamaReply(config, prompt, signal) {
+function buildOllamaRequest(config, prompt, { stream = false, numPredict } = {}) {
+  return {
+    model: config.ollama.model,
+    prompt,
+    stream,
+    think: false,
+    keep_alive: config.ollama.keepAlive,
+    options: {
+      temperature: config.ollama.temperature,
+      top_p: config.ollama.topP,
+      repeat_penalty: config.ollama.repeatPenalty,
+      num_predict: numPredict ?? config.ollama.numPredict
+    }
+  };
+}
+
+async function generateOllamaReply(config, prompt, signal, { numPredict } = {}) {
   const res = await fetch(`${config.ollama.endpoint}/api/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: config.ollama.model,
-      prompt,
-      stream: false,
-      think: false,
-      options: {
-        temperature: config.ollama.temperature,
-        top_p: config.ollama.topP,
-        repeat_penalty: config.ollama.repeatPenalty,
-        num_predict: config.ollama.numPredict
-      }
-    }),
+    body: JSON.stringify(buildOllamaRequest(config, prompt, { numPredict })),
     signal
   });
   const text = await res.text();
@@ -1714,7 +2157,7 @@ function trimReply(text, maxChars) {
   const normalized = removeCatchphrases(withoutMeta);
   const withoutIntro = removeSelfIntro(normalized);
   const withoutRepeats = removeRepetitivePhrases(withoutIntro);
-  return withoutRepeats.slice(0, maxChars).trim() || "今のコメント、ちゃんと届いてるよ。もう少しだけ聞かせてね。";
+  return withoutRepeats.slice(0, maxChars).trim() || EMPTY_REPLY;
 }
 
 function removeInternalReactionLeak(text) {
@@ -1770,17 +2213,17 @@ function removeRepetitivePhrases(text) {
     .trim();
 }
 
-async function synthesizeVoice(config, text) {
+async function synthesizeVoice(config, text, outPath = join(RUNTIME_DIR, "last.wav")) {
   const tts = config.tts ?? config.voicevox;
   const speechText = sanitizeTtsText(text);
   const engine = (tts.engine ?? "aivis").toLowerCase();
   if (["irodori-gradio", "irodori_gradio", "irodori-voicedesign"].includes(engine)) {
-    return synthesizeIrodoriGradioVoice(tts, speechText);
+    return synthesizeIrodoriGradioVoice(tts, speechText, outPath);
   }
   if (engine === "irodori") {
-    return synthesizeIrodoriVoice(tts, speechText);
+    return synthesizeIrodoriVoice(tts, speechText, outPath);
   }
-  return synthesizeAivisVoice(tts, speechText);
+  return synthesizeAivisVoice(tts, speechText, outPath);
 }
 
 function sanitizeCommentText(text) {
@@ -1800,7 +2243,7 @@ function stripEmojiAndUnsafeText(text) {
     .trim();
 }
 
-async function synthesizeIrodoriGradioVoice(tts, text) {
+async function synthesizeIrodoriGradioVoice(tts, text, wavPath) {
   const endpoint = String(tts.endpoint ?? "http://127.0.0.1:7861").replace(/\/+$/g, "");
   const timeoutMs = tts.timeoutMs ?? 300000;
   const data = await buildIrodoriGradioData(tts, text, endpoint, timeoutMs);
@@ -1814,7 +2257,6 @@ async function synthesizeIrodoriGradioVoice(tts, text) {
     throw new Error(`Irodori Gradio did not return audio.${runLog ? ` Log: ${runLog}` : ""}`);
   }
 
-  const wavPath = join(RUNTIME_DIR, "last.wav");
   await saveGradioAudioFile(tts, endpoint, audioFile, wavPath, timeoutMs);
   return wavPath;
 }
@@ -1982,7 +2424,7 @@ function resolveGradioOutputPath(tts, filePath) {
   return "";
 }
 
-async function synthesizeIrodoriVoice(tts, text) {
+async function synthesizeIrodoriVoice(tts, text, wavPath) {
   const endpoint = String(tts.endpoint ?? "http://127.0.0.1:8088").replace(/\/+$/g, "");
   const timeoutMs = tts.timeoutMs ?? 300000;
   const speechUrl = new URL(`${endpoint}/v1/audio/speech`);
@@ -2004,12 +2446,11 @@ async function synthesizeIrodoriVoice(tts, text) {
   }, timeoutMs);
   if (!res.ok) throw new Error(`Irodori TTS HTTP ${res.status}: ${await safeErrorText(res)}`);
 
-  const wavPath = join(RUNTIME_DIR, "last.wav");
   await writeResponseBodyToFile(res, wavPath);
   return wavPath;
 }
 
-async function synthesizeAivisVoice(tts, text) {
+async function synthesizeAivisVoice(tts, text, wavPath) {
   const endpoint = tts.endpoint;
   const timeoutMs = tts.timeoutMs ?? 30000;
   const speaker = await resolveTtsSpeaker(endpoint, tts.speaker);
@@ -2030,7 +2471,6 @@ async function synthesizeAivisVoice(tts, text) {
   }, timeoutMs);
   if (!synthRes.ok) throw new Error(`TTS synthesis HTTP ${synthRes.status}: ${await safeErrorText(synthRes)}`);
 
-  const wavPath = join(RUNTIME_DIR, "last.wav");
   await writeResponseBodyToFile(synthRes, wavPath);
   return wavPath;
 }
@@ -2155,7 +2595,108 @@ async function readWavLipSync(wavPath, frameMs = LIP_SYNC_FRAME_MS) {
   }
 }
 
-function playWav(wavPath) {
+// 常駐プレイヤーで鳴らす。使えない時は従来どおり毎回 PowerShell を起動して鳴らす。
+async function playWav(config, wavPath, { onStart, durationMs = 0 } = {}) {
+  let started = false;
+  const start = () => {
+    if (started) return;
+    started = true;
+    onStart?.();
+  };
+  if (wavPlayer && config.audio.persistentPlayer) {
+    const played = await wavPlayer.play(wavPath, { onStart: start, maxMs: (durationMs || 40000) + 5000 });
+    if (played) return;
+  }
+  start();
+  await playWavOnce(wavPath);
+}
+
+// PowerShell を毎回起動すると0.5〜1秒ほど待たされるので、1つだけ起動しっぱなしにして再生を頼む。
+function createWavPlayer() {
+  const script = [
+    "while ($true) {",
+    "  $line = [Console]::In.ReadLine()",
+    "  if ($line -eq $null) { break }",
+    "  try {",
+    "    $path = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($line.Trim()))",
+    "    $player = New-Object System.Media.SoundPlayer $path",
+    "    $player.Load()",
+    "    [Console]::Out.WriteLine('start')",
+    "    $player.PlaySync()",
+    "    $player.Dispose()",
+    "    [Console]::Out.WriteLine('done')",
+    "  } catch {",
+    "    [Console]::Out.WriteLine('error')",
+    "  }",
+    "}"
+  ].join("\n");
+  let child = null;
+  let onLine = null;
+
+  function ensure() {
+    if (child) return child;
+    const proc = spawn("powershell", [
+      "-NoProfile",
+      "-ExecutionPolicy", "Bypass",
+      "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")
+    ], { windowsHide: true, stdio: ["pipe", "pipe", "ignore"] });
+    let buffer = "";
+    proc.stdout.setEncoding("utf8");
+    proc.stdout.on("data", (chunk) => {
+      buffer += chunk;
+      let newline;
+      while ((newline = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        if (line) onLine?.(line);
+      }
+    });
+    const handleExit = () => {
+      if (child === proc) child = null;
+      onLine?.("exit");
+    };
+    proc.on("exit", handleExit);
+    proc.on("error", handleExit);
+    proc.stdin.on("error", () => {});
+    child = proc;
+    return proc;
+  }
+
+  function play(wavPath, { onStart, maxMs = 45000 } = {}) {
+    return new Promise((resolvePlay) => {
+      let started = false;
+      const finish = (ok) => {
+        clearTimeout(timer);
+        onLine = null;
+        resolvePlay(ok);
+      };
+      const timer = setTimeout(() => {
+        child?.kill();
+        child = null;
+        finish(started);
+      }, maxMs);
+      onLine = (line) => {
+        if (line === "start") {
+          started = true;
+          onStart?.();
+        } else if (line === "done") {
+          finish(true);
+        } else if (line === "error" || line === "exit") {
+          finish(started);
+        }
+      };
+      try {
+        ensure().stdin.write(`${Buffer.from(wavPath, "utf8").toString("base64")}\n`);
+      } catch {
+        finish(false);
+      }
+    });
+  }
+
+  return { play, warm: ensure };
+}
+
+function playWavOnce(wavPath) {
   const maxPlayMs = 45000;
   const command = [
     "Add-Type -AssemblyName System.Windows.Forms;",
