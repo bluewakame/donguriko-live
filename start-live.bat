@@ -17,6 +17,11 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+if not exist "node_modules\tiktok-live-connector" (
+  echo Installing Node.js packages for TikTok...
+  call npm install --no-audit --no-fund
+  if errorlevel 1 echo npm install failed. TikTok comments will not work until it succeeds.
+)
 
 echo [2/5] Checking Ollama...
 call :RestartOllamaForModelPath

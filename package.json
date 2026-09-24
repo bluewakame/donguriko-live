@@ -11,5 +11,8 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "tiktok-live-connector": "^2.5.0"
   }
 }
