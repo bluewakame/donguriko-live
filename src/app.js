@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { createSystemOne } from "./system-one.js";
 import { findUnsafeReason, isDistress, DISTRESS_REPLY, SAFE_REPLY, SAFETY_PROMPT } from "./safety.js";
+import { normalizeTikTokConfig, runTikTokLoop } from "./tiktok.js";
 
 const ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const CONFIG_PATH = join(ROOT, "config.json");
@@ -91,6 +92,7 @@ let state = {
   status: "starting",
   speaker: "どんぐりこ",
   commentAuthor: "",
+  commentService: "",
   commentText: "",
   replyText: "起動中だよ",
   isSpeaking: false,
@@ -132,7 +134,7 @@ async function main() {
   }
 
   const uiServer = startUiServer(config);
-  publish({ status: "ready", replyText: "YouTubeチャット待ってるよ" });
+  publish({ status: "ready", replyText: "コメント待ってるよ" });
   startViewerMonitor(config);
   startSpeedBoosters(config);
 
@@ -155,7 +157,18 @@ async function main() {
   if (config.comments.source !== "onecomme") {
     await enqueueLastCommentOnStartup(config);
   }
+  if (config.tiktok.enabled) startTikTok(config);
   await runCommentLoop(config);
+}
+
+// TikTok は YouTube（わんコメ）と並行して直接つなぐ。どちらのコメントも同じキューに入る。
+function startTikTok(config) {
+  runTikTokLoop(config, {
+    onComment: (comment) => enqueueComment(config, comment, { replacePending: true }),
+    onStatus: (tiktokStatus, error) => publish({ tiktokStatus, ...(error ? { lastError: `TikTok: ${error}` } : {}) })
+  }).catch((error) => {
+    console.warn(`[TikTok] 停止しました: ${error.message}`);
+  });
 }
 
 async function loadConfig() {
@@ -184,6 +197,11 @@ function normalizeBotConfig(config) {
   config.comments.onecomme = config.comments.onecomme ?? {};
   config.comments.onecomme.websocketUrl = config.comments.onecomme.websocketUrl ?? "ws://127.0.0.1:11180/sub";
   config.comments.onecomme.reconnectIntervalMs = config.comments.onecomme.reconnectIntervalMs ?? 5000;
+  // 受け付ける配信サービス（わんコメの service 名）。空なら全部受け付ける。
+  config.comments.onecomme.services = (config.comments.onecomme.services ?? [])
+    .map((service) => String(service).trim().toLowerCase())
+    .filter(Boolean);
+  normalizeTikTokConfig(config);
   config.youtube = config.youtube ?? { enabled: false, pollIntervalMs: 6000 };
   config.youtube.pollIntervalMs = config.youtube.pollIntervalMs ?? 6000;
   config.viewerMonitor = config.viewerMonitor ?? {};
@@ -264,10 +282,10 @@ function normalizeBotConfig(config) {
   config.tools.weather.cacheMs = Math.max(0, Number(config.tools.weather.cacheMs ?? 10 * 60 * 1000));
 
   config.bot.systemPrompt = config.bot.systemPrompt ?? [
-    "あなたはYouTube生配信でコメントに反応する、明るくて親しみやすいポンコツ配信者AIです。",
+    "あなたはYouTubeやTikTokの生配信でコメントに反応する、明るくて親しみやすいポンコツ配信者AIです。",
     "あなたの名前は必ず「どんぐりこ」です。名前を聞かれたら「どんぐりこだよ」と答えてください。",
     "名前を聞かれていない時は、自分の名前を名乗らないでください。",
-    "YouTubeニックネームが渡された時は、返事の中に自然に入れてください。",
+    "視聴者のニックネームが渡された時は、返事の中に自然に入れてください。",
     "使っているAIモデル、LLM、Ollama、Gemmaなどの内部構成を聞かれても、具体名は出さずに「そこは内緒だよ」と自然にぼかしてください。",
     "ちょっと抜けていて、言い間違えたり、あわあわしたり、すぐ自分でツッコミを入れたりしますが、視聴者にはやさしく前向きに接してください。",
     "返答は日本語で自然に、2文から4文くらいで話してください。コメント内容に具体的に触れて、短すぎる相づちだけで終わらないでください。",
@@ -288,12 +306,12 @@ async function runCommentLoop(config) {
   }
 
   if (config.comments.source === "manual") {
-    publish({ status: "manual", replyText: "YouTubeチャット待ってるよ" });
+    publish({ status: "manual", replyText: "コメント待ってるよ" });
     return;
   }
 
   if (!config.youtube.enabled) {
-    publish({ status: "no-comments", replyText: "YouTubeチャット待ってるよ" });
+    publish({ status: "no-comments", replyText: "コメント待ってるよ" });
     return;
   }
 
@@ -646,6 +664,7 @@ function enqueueSystemReply(config, replyText, options = {}) {
       publish({
         status: "thinking",
         commentAuthor,
+        commentService: "",
         commentText,
         replyText: preparingText,
         isSpeaking: false,
@@ -774,7 +793,7 @@ function rememberIdleTalk(topic, text) {
 async function runOneCommeLoop(config) {
   const url = config.comments.onecomme.websocketUrl;
   const reconnectIntervalMs = config.comments.onecomme.reconnectIntervalMs;
-  publish({ status: "connecting-onecomme", replyText: "YouTubeチャット待ってるよ", lastError: "" });
+  publish({ status: "connecting-onecomme", replyText: "コメント待ってるよ", lastError: "" });
 
   while (true) {
     try {
@@ -783,7 +802,7 @@ async function runOneCommeLoop(config) {
       publish({
         status: "waiting-onecomme",
         lastError: error.message,
-        replyText: "YouTubeチャット待ってるよ"
+        replyText: "コメント待ってるよ"
       });
     }
     await sleep(reconnectIntervalMs);
@@ -803,12 +822,13 @@ function connectOneComme(config, url) {
 
     ws.addEventListener("open", () => {
       opened = true;
-      publish({ status: "listening-onecomme", replyText: "YouTubeチャット待ってるよ", lastError: "" });
+      publish({ status: "listening-onecomme", replyText: "コメント待ってるよ", lastError: "" });
     });
 
     ws.addEventListener("message", (event) => {
-      const comments = extractOneCommeComments(event.data);
-      if (comments.length === 0) logIgnoredOneCommeEvent(event.data);
+      const allComments = extractOneCommeComments(event.data);
+      if (allComments.length === 0) logIgnoredOneCommeEvent(event.data);
+      const comments = allComments.filter((comment) => shouldAcceptOneCommeComment(config, comment));
       const targetComments = selectOneCommeCommentsToProcess(comments, seenKeys);
       for (const comment of targetComments) {
         const text = sanitizeCommentText(comment.text);
@@ -819,7 +839,9 @@ function connectOneComme(config, url) {
         enqueueComment(config, {
           id,
           author: comment.author || "視聴者",
-          text
+          text,
+          service: comment.service,
+          eventNote: comment.hasGift ? ONECOMME_GIFT_NOTE : ""
         }, { replacePending: true });
       }
     });
@@ -833,6 +855,16 @@ function connectOneComme(config, url) {
       else resolve();
     });
   });
+}
+
+const ONECOMME_GIFT_NOTE = "このコメントはギフト（スーパーチャットなどの投げ銭）付きです。贈ってくれたことに、うれしそうにお礼を言ってください。";
+
+function shouldAcceptOneCommeComment(config, comment) {
+  const { services } = config.comments.onecomme;
+  if (services.length > 0 && comment.service && !services.includes(comment.service)) return false;
+  // TikTok を直接つないでいる時は、わんコメ側の TikTok コメントは二重になるので捨てる。
+  if (config.tiktok.enabled && comment.service === "tiktok") return false;
+  return true;
 }
 
 function selectOneCommeCommentsToProcess(comments, seenKeys) {
@@ -876,9 +908,10 @@ function enqueueComment(config, comment, { force = false, replacePending = false
     });
   }
   if (replacePending && pendingCommentCount > 0) {
-    const pendingIsDistress = pendingLatestOneCommeComment
-      && isDistress(sanitizeCommentText(pendingLatestOneCommeComment.text));
-    if (!pendingIsDistress) pendingLatestOneCommeComment = comment;
+    // 待っているのがギフト・フォローやつらい気持ちのコメントなら、普通のコメントでは上書きしない。
+    if (!pendingLatestOneCommeComment || !isPriorityComment(pendingLatestOneCommeComment) || isPriorityComment(comment)) {
+      pendingLatestOneCommeComment = comment;
+    }
     publish({ queueSize: pendingCommentCount + 1 });
     return commentQueue;
   }
@@ -903,6 +936,10 @@ function enqueueComment(config, comment, { force = false, replacePending = false
       }
     });
   return commentQueue;
+}
+
+function isPriorityComment(comment) {
+  return Boolean(comment.eventNote) || isDistress(sanitizeCommentText(comment.text));
 }
 
 async function enqueueLastCommentOnStartup(config) {
@@ -1064,7 +1101,9 @@ function normalizeOneCommeComment(item) {
     ?? data.comment?.id
     ?? data.message?.id;
   const timestamp = extractOneCommeTimestamp(item);
-  return { id: String(id ?? ""), author: String(author), text, timestamp };
+  const service = String(item.service ?? data.service ?? "").trim().toLowerCase();
+  const hasGift = Boolean(data.hasGift ?? item.hasGift);
+  return { id: String(id ?? ""), author: String(author), text, timestamp, service, hasGift };
 }
 
 function extractOneCommeTimestamp(item) {
@@ -1387,6 +1426,7 @@ async function handleComment(config, comment) {
   publish({
     status: "thinking",
     commentAuthor: comment.author,
+    commentService: platformLabel(comment.service),
     commentText: filtered.text,
     replyText: "考え中だよ...",
     isSpeaking: false,
@@ -1396,11 +1436,12 @@ async function handleComment(config, comment) {
   // System One（即答）で済むものはすぐ返し、考える必要があるものだけ System Two（LLM）へ回す。
   const timing = { startedAt: performance.now(), firstAudioAt: 0 };
   const decision = systemOne.decide(filtered.text);
-  let route = decision.route;
+  // ギフトやフォローはお礼を言ってほしいので、即答や定型文に回さず必ず LLM に考えさせる。
+  let route = comment.eventNote ? "system-two" : decision.route;
   let reply = "";
   try {
-    const canned = makeCannedReply(filtered.text);
-    const toolReply = canned ? undefined : await makeToolReply(config, filtered.text);
+    const canned = comment.eventNote ? undefined : makeCannedReply(filtered.text);
+    const toolReply = canned || comment.eventNote ? undefined : await makeToolReply(config, filtered.text);
     if (canned || toolReply) {
       route = canned ? "canned" : "tool";
       // 定型文は trimReply を通すと「どんぐりこだよ。」が自己紹介除去で消えてしまうのでそのまま使う。
@@ -1411,9 +1452,9 @@ async function handleComment(config, comment) {
       await speakReply(config, reply, { cache: true, timing });
     } else if (config.ollama.stream) {
       const filler = startFiller(config, decision, timing);
-      reply = await speakSegments(config, streamReplySegments(config, comment.author, filtered.text), { before: filler, timing });
+      reply = await speakSegments(config, streamReplySegments(config, comment.author, filtered.text, comment), { before: filler, timing });
     } else {
-      reply = trimReply(await askOllama(config, comment.author, filtered.text), config.bot.maxReplyChars);
+      reply = trimReply(await askOllama(config, comment.author, filtered.text, comment), config.bot.maxReplyChars);
       const unsafe = isUnsafeReply(config, reply);
       if (unsafe) reply = SAFE_REPLY;
       await speakReply(config, reply, { cache: unsafe, timing });
@@ -1448,7 +1489,7 @@ async function handleDistressComment(config, comment) {
   lastDistressReplyAt = now;
   distressRepliedAt.set(author, now);
 
-  publish({ status: "thinking", commentAuthor: "", commentText: "", replyText: "", isSpeaking: false, lastError: "" });
+  publish({ status: "thinking", commentAuthor: "", commentService: "", commentText: "", replyText: "", isSpeaking: false, lastError: "" });
   await speakReply(config, config.bot.distressReply, { cache: true });
   publish({ status: "listening", isSpeaking: false });
   await sleep(config.bot.cooldownMs);
@@ -1940,24 +1981,41 @@ function sanitizeNickname(author) {
 }
 
 // 毎回変わらない部分（システムプロンプト・長期記憶）を先頭に置くと、Ollama が前回の計算を再利用できる。
-async function buildReplyPrompts(config, author, text) {
+const PLATFORM_LABELS = {
+  youtube: "YouTube",
+  tiktok: "TikTok",
+  twitch: "Twitch",
+  niconama: "ニコ生",
+  twicas: "ツイキャス",
+  showroom: "SHOWROOM",
+  mirrativ: "ミラティブ"
+};
+
+function platformLabel(service) {
+  if (!service) return "";
+  return PLATFORM_LABELS[service] ?? service;
+}
+
+async function buildReplyPrompts(config, author, text, { service = "", eventNote = "" } = {}) {
   await refreshMarkdownMemoryIfChanged(config);
   const longTermMemoryPrompt = formatLongTermMemory();
   const memoryPrompt = formatShortTermMemory(config, author, text);
   const nickname = sanitizeNickname(author);
-  const nicknameLine = nickname ? `YouTubeニックネーム: ${nickname}\n` : "";
+  const platform = platformLabel(service);
+  const nicknameLine = nickname ? `ニックネーム: ${nickname}${platform ? `（${platform}の視聴者）` : ""}\n` : "";
+  const eventLine = eventNote ? `${eventNote}\n` : "";
   const innerPrompt = buildInnerReactionPrompt();
   return {
-    prompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n今回のコメントだけに自然に返してください。直前の話題は、コメントが明確に続きだと分かる時だけ使ってください。絵文字だけ、相づちだけ、定型文だけで終わらず、コメント内容に具体的に反応してください。\n\n${memoryPrompt}${nicknameLine}コメント: ${text}\n返答:`,
+    prompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n今回のコメントだけに自然に返してください。直前の話題は、コメントが明確に続きだと分かる時だけ使ってください。絵文字だけ、相づちだけ、定型文だけで終わらず、コメント内容に具体的に反応してください。\n\n${memoryPrompt}${nicknameLine}${eventLine}コメント: ${text}\n返答:`,
     retryPrompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n次のコメントに日本語で2文から4文くらいで具体的に返してください。定型文だけで終わらず、コメント内容に触れてください。\nコメント: ${text}\n返答:`
   };
 }
 
-async function askOllama(config, author, text) {
+async function askOllama(config, author, text, commentInfo) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.ollama.timeoutMs);
   try {
-    const { prompt, retryPrompt } = await buildReplyPrompts(config, author, text);
+    const { prompt, retryPrompt } = await buildReplyPrompts(config, author, text, commentInfo);
     const response = await generateOllamaReply(config, prompt, controller.signal);
     if (response.trim()) return response;
     return await generateOllamaReply(config, retryPrompt, controller.signal);
@@ -1967,13 +2025,13 @@ async function askOllama(config, author, text) {
 }
 
 // LLM の返事を1文ずつ取り出す。全文が出来上がるのを待たずに、1文目から音声合成へ回せる。
-async function* streamReplySegments(config, author, text) {
+async function* streamReplySegments(config, author, text, commentInfo) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.ollama.timeoutMs);
   const cleaner = createReplyCleaner(config.bot.maxReplyChars);
   let emitted = 0;
   try {
-    const { prompt, retryPrompt } = await buildReplyPrompts(config, author, text);
+    const { prompt, retryPrompt } = await buildReplyPrompts(config, author, text, commentInfo);
     let blocked = false;
     for await (const sentence of streamOllamaSentences(config, prompt, controller.signal)) {
       const cleaned = cleaner.push(sentence);

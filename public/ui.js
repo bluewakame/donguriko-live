@@ -325,7 +325,8 @@ function readableReply(text, state) {
 }
 
 function render(state) {
-  author.textContent = state.commentAuthor ? `${state.commentAuthor}:` : "";
+  const service = state.commentService ? `[${state.commentService}] ` : "";
+  author.textContent = state.commentAuthor ? `${service}${state.commentAuthor}:` : "";
   comment.textContent = state.commentText || "";
   reply.textContent = readableReply(state.replyText, state);
   status.textContent = state.lastError ? `${state.status} / ${state.lastError}` : state.status;

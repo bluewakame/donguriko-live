@@ -1,6 +1,6 @@
 # YouTube Gemma Local TTS Live Bot
 
-わんコメからコメントを受け取り、ローカルのOllama/Gemmaで返答を作り、irodori-TTS（Gradio版）で読み上げ、OBSへどんぐりこのLive2Dモデルを表示する配信ボットです。読み上げ音声の音量に合わせて口が動きます。YouTube Data APIは使わない構成です。
+わんコメ（YouTube）とTikTok LIVEからコメントを受け取り、ローカルのOllama/Gemmaで返答を作り、irodori-TTS（Gradio版）で読み上げ、OBSへどんぐりこのLive2Dモデルを表示する配信ボットです。読み上げ音声の音量に合わせて口が動きます。YouTube Data APIは使わない構成です。
 
 ## 必要なもの
 
@@ -9,7 +9,7 @@
 - Ollama
 - Gemma系モデル
 - irodori-TTS（`%USERPROFILE%\Irodori-TTS` に配置し、`.venv` を作成済みであること）
-- わんコメ
+- わんコメ（YouTubeのコメント取得用）
 
 ## 初回設定
 
@@ -205,6 +205,49 @@ node src/app.js --policy-test
 - 連投で何度も読ませる荒らし対策として、同じ人には10分に1回、全体でも1分に1回までしか読み上げません（コンソールへの通知は毎回出ます）。
 - わんコメから複数のコメントがまとめて来ても、このコメントを優先して処理します。
 - 言葉を変えたい場合は `config.json` の `bot.distressReply` に書いてください。
+
+## TikTokのコメント
+
+TikTok LIVEは、わんコメを通さずこのアプリが直接つなぎます（非公式ライブラリ [tiktok-live-connector](https://github.com/zerodytrash/TikTok-Live-Connector) を使用）。TikTokへのログインは不要です。YouTube（わんコメ経由）と同時に使えて、両方のコメントに返事をします。
+
+1. 初回だけこのフォルダで `npm install` を実行します（`start-live.bat` は未インストールなら自動で実行します）。
+2. `config.json` の `tiktok` を設定します。
+
+```json
+"tiktok": {
+  "enabled": true,
+  "uniqueId": "あなたのTikTokユーザー名"
+}
+```
+
+`uniqueId` は `https://www.tiktok.com/@ユーザー名/live` の `@` の後ろの部分です。
+
+3. 配信を始めてからでも前でも、`start-live.bat` で起動します。配信していない間は1分ごとに確認し、始まったら自動でつながります。切れた時も自動で再接続します。
+
+画面のコメント欄には `[TikTok] 名前:` のように配信元が付きます。AIにも「TikTokの視聴者」だと伝えています。
+
+| キー | 既定値 | 内容 |
+| --- | --- | --- |
+| `enabled` | `false` | TikTokに直接つなぐかどうか |
+| `uniqueId` | `""` | 配信者のユーザー名（`@`の後ろ） |
+| `signApiKey` | `""` | Euler Stream のAPIキー（任意。下の注意を参照） |
+| `replyToGifts` | `true` | ギフトが来たらお礼を言う |
+| `minGiftDiamonds` | `0` | この額（ダイヤ）未満のギフトにはお礼を言わない。小さいギフトが多すぎる時に上げる |
+| `replyToFollows` | `true` | フォローされたらお礼を言う |
+| `reconnectIntervalMs` | `10000` | 切れた時に再接続するまでの時間。失敗が続くと最大5分までのびる |
+| `offlineRetryMs` | `60000` | 配信していない時に、始まったかを確認する間隔 |
+
+- 入室・いいね・シェアには反応しません。コメント・ギフト・フォローだけに返事をします。
+- ギフトとフォローは、即答や定型文を使わず必ずAIが考えてお礼を言います。処理中に次々コメントが来ても、ギフト・フォローは普通のコメントに押し流されません。
+- 連続ギフト（バラを何回も送る等）は、送り終わった時に「×回数」でまとめて1回だけお礼を言います。
+- 接続した瞬間に、それまでのコメントへまとめて返事することはありません。
+- TikTokだけで配信する場合は、`comments.source` を `"manual"` にするとわんコメへの接続を止められます。
+- わんコメにもTikTokの枠を追加していた場合、`tiktok.enabled` が `true` の間はわんコメ側のTikTokコメントを無視します（二重に返事しないため）。
+
+**注意**
+
+- TikTokには公式のコメント取得APIがありません。このライブラリはTikTokの内部の仕組みを読んでいるため、TikTok側の変更で突然つながらなくなることがあります。その時は `npm install tiktok-live-connector@latest` で更新してください。
+- 接続時の署名に外部サービス（[Euler Stream](https://www.eulerstream.com/)）を使います。送るのは配信者のユーザー名などで、TikTokのログイン情報は送りません。無料で使えますが回数制限があり、接続できない時はコンソールに `[TikTok] 接続できませんでした` と出ます。頻繁に制限にかかる場合は、Euler Stream でAPIキーを作って `signApiKey` に入れてください。
 
 ## 運用メモ
 
