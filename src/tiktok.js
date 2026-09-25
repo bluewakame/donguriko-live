@@ -65,8 +65,9 @@ function connectOnce(settings, library, seenIds, { onComment, onStatus }) {
   const connection = new TikTokLiveConnection(settings.uniqueId, {
     ...(settings.signApiKey ? { signApiKey: settings.signApiKey } : {}),
     // 接続した瞬間に過去のコメントへまとめて返事しないよう、初回の履歴は捨てる。
-    processInitialData: false,
-    enableExtendedGiftInfo: true
+    // enableExtendedGiftInfo は Euler Stream の有料プランが必要で、失敗すると接続ごと落ちるので使わない。
+    // ギフト名とダイヤ数は data.gift に入っている。
+    processInitialData: false
   });
 
   const emit = (id, user, text, eventNote = "") => {
@@ -78,20 +79,22 @@ function connectOnce(settings, library, seenIds, { onComment, onStatus }) {
   };
 
   connection.on(WebcastEvent.CHAT, (data) => {
-    const text = String(data.comment ?? "").trim();
+    // tiktok-live-connector 2.x は本文が content に入る（1.x は comment）。
+    const text = String(data.content ?? data.comment ?? "").trim();
     if (!text) return;
     emit(messageId(data), data.user, text);
   });
 
   connection.on(WebcastEvent.GIFT, (data) => {
     if (!settings.replyToGifts) return;
-    const gift = data.giftDetails ?? {};
+    // 2.x はギフト情報が gift に入る（1.x は giftDetails）。
+    const gift = data.gift ?? data.giftDetails ?? {};
     // 連続ギフトは送り終わった時（repeatEnd）の1回だけ拾う。
-    if (gift.giftType === 1 && !data.repeatEnd) return;
+    if ((gift.type ?? gift.giftType) === 1 && !data.repeatEnd) return;
     const count = Math.max(1, Number(data.repeatCount ?? 1));
     const diamonds = Number(gift.diamondCount ?? data.extendedGiftInfo?.diamond_count ?? 0) * count;
     if (diamonds < settings.minGiftDiamonds) return;
-    const name = gift.giftName || data.extendedGiftInfo?.name || "ギフト";
+    const name = gift.name || gift.giftName || data.extendedGiftInfo?.name || "ギフト";
     emit(messageId(data), data.user, `ギフト「${name}」×${count}`, GIFT_NOTE);
   });
 
