@@ -284,7 +284,9 @@ body.vertical .captions {
   position: absolute;
   left: 24px;
   right: 24px;
-  top: 42%;
+  /* 縦型の字幕の中心の高さ。URLの captionY（0＝上端、1＝下端）で変えられる。
+     下げすぎるとスマホのTikTokのコメント欄やボタンに隠れるので、既定は少し下げた程度にしている。 */
+  top: var(--caption-y, 62%);
   transform: translateY(-50%);
   z-index: 5;
   max-width: calc(100vw - 48px);
