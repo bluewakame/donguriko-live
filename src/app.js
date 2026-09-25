@@ -83,6 +83,8 @@ let lastActivityAt = Date.now();
 let lastIdleTalkAt = 0;
 let idleTalkStreak = 0;
 let recentIdleTalks = [];
+let lastPromoAt = Date.now();
+let promoIndex = 0;
 let systemOne = createSystemOne();
 let wavPlayer = null;
 let currentAudioPath = join(RUNTIME_DIR, "last.wav");
@@ -158,6 +160,7 @@ async function main() {
   }
 
   startIdleTalk(config);
+  startPromo(config);
 
   if (config.comments.source !== "onecomme") {
     await enqueueLastCommentOnStartup(config);
@@ -228,6 +231,15 @@ function normalizeBotConfig(config) {
   config.idleTalk.messages = Array.isArray(config.idleTalk.messages) && config.idleTalk.messages.length > 0
     ? config.idleTalk.messages
     : DEFAULT_IDLE_MESSAGES;
+  config.promo = config.promo ?? {};
+  config.promo.enabled = config.promo.enabled ?? false;
+  config.promo.intervalMs = Math.max(60000, Number(config.promo.intervalMs ?? 600000));
+  config.promo.firstDelayMs = Math.max(0, Number(config.promo.firstDelayMs ?? 120000));
+  config.promo.checkIntervalMs = Math.max(5000, Number(config.promo.checkIntervalMs ?? 15000));
+  config.promo.label = config.promo.label ?? "お知らせ";
+  config.promo.messages = (Array.isArray(config.promo.messages) ? config.promo.messages : [])
+    .map((message) => String(message ?? "").trim())
+    .filter(Boolean);
   config.server = config.server ?? {};
   config.server.host = config.server.host ?? "127.0.0.1";
   config.server.port = config.server.port ?? 8787;
@@ -696,6 +708,39 @@ function enqueueSystemReply(config, replyText, options = {}) {
 function markActivity() {
   lastActivityAt = Date.now();
   idleTalkStreak = 0;
+}
+
+// 宣伝やお知らせを決まった間隔で読み上げる。AIに作らせると機能を作り話しかねないので、固定文を順番に読む。
+// コメントに返事をしている間は割り込まず、手が空いたところで読む。
+function startPromo(config) {
+  const promo = config.promo;
+  if (!promo.enabled || promo.messages.length === 0) return;
+  // 起動してから firstDelayMs 後に1回目を読む。
+  lastPromoAt = Date.now() - promo.intervalMs + promo.firstDelayMs;
+  setInterval(() => {
+    maybeSpeakPromo(config).catch((error) => {
+      console.warn(`お知らせの読み上げに失敗しました: ${error.message}`);
+    });
+  }, promo.checkIntervalMs);
+}
+
+async function maybeSpeakPromo(config) {
+  const promo = config.promo;
+  if (pendingCommentCount > 0) return;
+  const now = Date.now();
+  if (now - lastPromoAt < promo.intervalMs) return;
+  lastPromoAt = now;
+  const message = promo.messages[promoIndex % promo.messages.length];
+  promoIndex += 1;
+  await enqueueSystemReply(config, message, {
+    id: `promo:${now}`,
+    commentAuthor: promo.label,
+    commentText: "",
+    preparingText: "お知らせ準備中だよ...",
+    errorText: "お知らせでエラーが出たよ"
+  });
+  // 次のお知らせまでの間隔は、読み終わった時点から数える。
+  lastPromoAt = Date.now();
 }
 
 function startIdleTalk(config) {
@@ -1743,6 +1788,8 @@ function makeCannedReply(text) {
 }
 
 async function makeToolReply(config, text) {
+  const dayOffset = dateQuestionOffset(text);
+  if (dayOffset !== null) return makeDateReply(config, dayOffset);
   if (isTimeQuestion(text)) return makeTimeReply(config);
   if (isWeatherQuestion(text)) return await makeWeatherReply(config);
   return undefined;
@@ -1750,6 +1797,51 @@ async function makeToolReply(config, text) {
 
 function isTimeQuestion(text) {
   return /(今何時|いま何時|何時|現在時刻|今の時刻|時間教えて|時刻教えて|time)/i.test(String(text ?? ""));
+}
+
+// 「今日は何曜日？」「明日って何日？」など、日付・曜日を聞く質問なら何日後か（今日=0）を返す。違えば null。
+// 「月曜日が好き」「何日かかる？」のような文には反応しないよう、聞き方の形で見分ける。
+function dateQuestionOffset(text) {
+  const normalized = String(text ?? "").replace(/\s+/g, "");
+  const asksDate = /(何|なに|なん)(曜|よう(び|日))|(何|なん)(日|にち)(?!か|間|前|後|くらい|ぐらい|ほど|も)|何月何日|日付|日にち/.test(normalized);
+  if (!asksDate) return null;
+  if (/明々後日|しあさって/.test(normalized)) return 3;
+  if (/明後日|あさって/.test(normalized)) return 2;
+  if (/明日|あした|あす/.test(normalized)) return 1;
+  if (/一昨日|おととい/.test(normalized)) return -2;
+  if (/昨日|きのう/.test(normalized)) return -1;
+  return 0;
+}
+
+// Gemma は今日の日付を知らないので、日付の答えは時計から作る。
+function formatDateJa(config, dayOffset = 0) {
+  const timeZone = config.tools?.time?.timeZone || "Asia/Tokyo";
+  const date = new Date(Date.now() + dayOffset * 24 * 60 * 60 * 1000);
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("ja-JP", {
+    timeZone,
+    month: "numeric",
+    day: "numeric",
+    weekday: "long"
+  }).formatToParts(date).map((part) => [part.type, part.value]));
+  return `${parts.month}月${parts.day}日の${parts.weekday}`;
+}
+
+function makeDateReply(config, dayOffset) {
+  if (!config.tools?.time?.enabled) return undefined;
+  const dayLabel = { "-2": "おととい", "-1": "昨日", 0: "今日", 1: "明日", 2: "あさって", 3: "しあさって" }[dayOffset] ?? "今日";
+  const verb = dayOffset < 0 ? "だったよ" : "だよ";
+  return `${dayLabel}は${formatDateJa(config, dayOffset)}${verb}。カレンダー見てきたから、今回はばっちりのはず。`;
+}
+
+// Gemma に渡す「今」の情報。日付や曜日を当てずっぽうで答えないようにする。
+// 毎回変わるので、Ollama が前回の計算を使い回せるよう、プロンプトの後ろ（コメントの直前）に置く。
+function currentDateTimeLine(config) {
+  const timeZone = config.tools?.time?.timeZone || "Asia/Tokyo";
+  const label = config.tools?.time?.label || timeZone;
+  const now = new Date();
+  const year = new Intl.DateTimeFormat("ja-JP", { timeZone, year: "numeric" }).format(now);
+  const time = new Intl.DateTimeFormat("ja-JP", { timeZone, hour: "2-digit", minute: "2-digit", hour12: false }).format(now);
+  return `今は${year}${formatDateJa(config)}、${label}時間の${time}です。日付・曜日・時刻の話はこれを使い、推測で答えないでください。\n`;
 }
 
 function isWeatherQuestion(text) {
@@ -2032,8 +2124,8 @@ async function buildReplyPrompts(config, author, text, { service = "", eventNote
   const eventLine = eventNote ? `${eventNote}\n` : "";
   const innerPrompt = buildInnerReactionPrompt();
   return {
-    prompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n今回のコメントだけに自然に返してください。直前の話題は、コメントが明確に続きだと分かる時だけ使ってください。絵文字だけ、相づちだけ、定型文だけで終わらず、コメント内容に具体的に反応してください。\n\n${memoryPrompt}${nicknameLine}${eventLine}コメント: ${text}\n返答:`,
-    retryPrompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n次のコメントに日本語で2文から4文くらいで具体的に返してください。定型文だけで終わらず、コメント内容に触れてください。\nコメント: ${text}\n返答:`
+    prompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n今回のコメントだけに自然に返してください。直前の話題は、コメントが明確に続きだと分かる時だけ使ってください。絵文字だけ、相づちだけ、定型文だけで終わらず、コメント内容に具体的に反応してください。\n\n${memoryPrompt}${currentDateTimeLine(config)}${nicknameLine}${eventLine}コメント: ${text}\n返答:`,
+    retryPrompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n次のコメントに日本語で2文から4文くらいで具体的に返してください。定型文だけで終わらず、コメント内容に触れてください。\n${currentDateTimeLine(config)}コメント: ${text}\n返答:`
   };
 }
 
