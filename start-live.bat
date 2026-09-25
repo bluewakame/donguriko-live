@@ -1,12 +1,13 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+set "APP_DIR=%~dp0"
 
 set "IRODORI_DIR=%USERPROFILE%\Irodori-TTS"
 set "IRODORI_PYTHON=%USERPROFILE%\Irodori-TTS\.venv\Scripts\python.exe"
 set "IRODORI_APP=%USERPROFILE%\Irodori-TTS\gradio_app_voicedesign.py"
 set "OLLAMA_MODELS=C:\Users\Public\OllamaModels"
-set "OLLAMA_MODEL=gemma4:e2b"
+set "OLLAMA_MODEL=gemma4:e4b"
 set "OLLAMA_EXE=%LOCALAPPDATA%\Programs\Ollama\ollama.exe"
 if not exist "%OLLAMA_MODELS%" mkdir "%OLLAMA_MODELS%" >nul 2>nul
 
@@ -86,7 +87,8 @@ if errorlevel 1 (
   echo Ollama executable was not found. Replies may not work until Ollama is started manually.
   exit /b 1
 )
-start "Ollama server" /min cmd /c "set OLLAMA_MODELS=%OLLAMA_MODELS%&& ""%OLLAMA_EXE%"" serve"
+rem Flash Attention and a q8_0 KV cache shrink Ollama's GPU memory so Gemma stays 100%% on GPU.
+start "Ollama server" /min cmd /c "set OLLAMA_MODELS=%OLLAMA_MODELS%&& set OLLAMA_FLASH_ATTENTION=1&& set OLLAMA_KV_CACHE_TYPE=q8_0&& ""%OLLAMA_EXE%"" serve"
 exit /b 0
 
 :RestartOllamaForModelPath
@@ -142,7 +144,8 @@ exit /b %errorlevel%
 echo irodori-TTS Gradio was not found at http://127.0.0.1:7861
 if exist "%IRODORI_PYTHON%" if exist "%IRODORI_APP%" (
   echo Starting irodori-TTS: %IRODORI_APP%
-  start "irodori-TTS" /min /D "%IRODORI_DIR%" "%IRODORI_PYTHON%" "%IRODORI_APP%" --server-port 7861
+  rem tools\irodori_lowvram.py returns GPU memory after each voice so Ollama keeps enough room.
+  start "irodori-TTS" /min /D "%IRODORI_DIR%" "%IRODORI_PYTHON%" "%APP_DIR%tools\irodori_lowvram.py" "%IRODORI_DIR%" --server-port 7861
   exit /b 0
 )
 echo irodori-TTS Python or app file was not found.

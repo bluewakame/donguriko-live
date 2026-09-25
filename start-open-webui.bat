@@ -3,7 +3,7 @@ setlocal
 cd /d "%~dp0"
 
 set "OLLAMA_MODELS=C:\Users\Public\OllamaModels"
-set "OLLAMA_MODEL=gemma4:e2b"
+set "OLLAMA_MODEL=gemma4:e4b"
 set "OLLAMA_EXE=%LOCALAPPDATA%\Programs\Ollama\ollama.exe"
 set "DOCKER_EXE=docker"
 set "OPEN_WEBUI_URL=http://localhost:3000"
@@ -87,7 +87,8 @@ if errorlevel 1 (
   echo Ollama executable was not found.
   exit /b 1
 )
-start "Ollama server" /min cmd /c "set OLLAMA_MODELS=%OLLAMA_MODELS%&& ""%OLLAMA_EXE%"" serve"
+rem Flash Attention and a q8_0 KV cache shrink Ollama's GPU memory so Gemma stays 100%% on GPU.
+start "Ollama server" /min cmd /c "set OLLAMA_MODELS=%OLLAMA_MODELS%&& set OLLAMA_FLASH_ATTENTION=1&& set OLLAMA_KV_CACHE_TYPE=q8_0&& ""%OLLAMA_EXE%"" serve"
 exit /b 0
 
 :RestartOllamaForModelPath
