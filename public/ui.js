@@ -62,6 +62,10 @@ if (isVerticalLayout) {
 if (params.get("obs") === "1") {
   document.body.classList.add("obs");
 }
+const requestedCaptionY = numberParam("captionY", NaN);
+if (Number.isFinite(requestedCaptionY)) {
+  document.body.style.setProperty("--caption-y", `${clamp(requestedCaptionY, 0, 1) * 100}%`);
+}
 
 const requestedPetScale = Number(params.get("petScale"));
 const requestedPetX = Number(params.get("petX"));
