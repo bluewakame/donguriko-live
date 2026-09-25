@@ -92,7 +92,7 @@ exit /b 0
 
 :RestartOllamaForModelPath
 echo Restarting Ollama so it uses %OLLAMA_MODELS%
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Process -Name 'ollama*' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Process -Name 'ollama*','llama-server' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue"
 timeout /t 2 /nobreak >nul
 exit /b 0
 
