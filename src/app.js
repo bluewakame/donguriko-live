@@ -2018,6 +2018,10 @@ function platformLabel(service) {
   return PLATFORM_LABELS[service] ?? service;
 }
 
+// 「ポンコツ」「言い間違える」キャラ指示を、小さいモデルは「知らないふりをする」と受け取りがち。
+// systemPrompt を書き換えても消えないよう、コード側で毎回付け足す。
+const KNOWLEDGE_PROMPT = "知識を聞く質問（首都、計算、言葉の意味、歴史、科学など）には、1文目で正しい答えをはっきり言ってください。ドジなのは口調やリアクションだけで、答えの中身はわざと間違えたり、知らないふりをしたりしないでください。本当に分からない時だけ、分からないと正直に言ってください。";
+
 async function buildReplyPrompts(config, author, text, { service = "", eventNote = "" } = {}) {
   await refreshMarkdownMemoryIfChanged(config);
   const longTermMemoryPrompt = formatLongTermMemory();
@@ -2028,8 +2032,8 @@ async function buildReplyPrompts(config, author, text, { service = "", eventNote
   const eventLine = eventNote ? `${eventNote}\n` : "";
   const innerPrompt = buildInnerReactionPrompt();
   return {
-    prompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n今回のコメントだけに自然に返してください。直前の話題は、コメントが明確に続きだと分かる時だけ使ってください。絵文字だけ、相づちだけ、定型文だけで終わらず、コメント内容に具体的に反応してください。\n\n${memoryPrompt}${nicknameLine}${eventLine}コメント: ${text}\n返答:`,
-    retryPrompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n次のコメントに日本語で2文から4文くらいで具体的に返してください。定型文だけで終わらず、コメント内容に触れてください。\nコメント: ${text}\n返答:`
+    prompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n今回のコメントだけに自然に返してください。直前の話題は、コメントが明確に続きだと分かる時だけ使ってください。絵文字だけ、相づちだけ、定型文だけで終わらず、コメント内容に具体的に反応してください。\n\n${memoryPrompt}${nicknameLine}${eventLine}コメント: ${text}\n返答:`,
+    retryPrompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n次のコメントに日本語で2文から4文くらいで具体的に返してください。定型文だけで終わらず、コメント内容に触れてください。\nコメント: ${text}\n返答:`
   };
 }
 
@@ -2190,7 +2194,7 @@ function buildInnerReactionPrompt() {
   return [
     "返答を作る前に、頭の中だけで次の2つを決めてください。",
     "1. 感情タグ: 喜び、驚き、照れ、困惑、ツッコミ、応援、しょんぼり、得意げ、あわあわ、通常の中から1つ選ぶ。",
-    "2. 返答方針: コメントのどの言葉を拾うか、どんなポンコツ反応を少し混ぜるか、最後を質問・共感・軽いツッコミのどれで締めるかを決める。",
+    "2. 返答方針: コメントのどの言葉を拾うか、最後を質問・共感・軽いツッコミのどれで締めるかを決める。",
     "感情タグや返答方針は絶対に出力しないでください。画面に出すのは自然な返答文だけです。",
     "毎回同じ言い回しにせず、コメントの具体語を1つ以上拾ってください。ポンコツ感は少量にして、意味が通る文章にしてください。"
   ].join("\n");
