@@ -76,7 +76,7 @@ let pendingLatestOneCommeComment = null;
 let shortTermMemory = [];
 let longTermMemoryText = "";
 let longTermMemoryMtimeMs = 0;
-let weatherCache = { at: 0, reply: "" };
+let weatherCache = new Map();
 let lastViewerCount = null;
 let lastViewerAnnouncementAt = 0;
 let lastActivityAt = Date.now();
@@ -137,6 +137,11 @@ async function main() {
 
   if (args.has("--policy-test")) {
     runPolicyTest(config);
+    return;
+  }
+
+  if (args.has("--weather-test")) {
+    await runWeatherTest(config);
     return;
   }
 
@@ -1791,7 +1796,7 @@ async function makeToolReply(config, text) {
   const dayOffset = dateQuestionOffset(text);
   if (dayOffset !== null) return makeDateReply(config, dayOffset);
   if (isTimeQuestion(text)) return makeTimeReply(config);
-  if (isWeatherQuestion(text)) return await makeWeatherReply(config);
+  if (isWeatherQuestion(text)) return await makeWeatherReply(config, text);
   return undefined;
 }
 
@@ -1805,6 +1810,12 @@ function dateQuestionOffset(text) {
   const normalized = String(text ?? "").replace(/\s+/g, "");
   const asksDate = /(何|なに|なん)(曜|よう(び|日))|(何|なん)(日|にち)(?!か|間|前|後|くらい|ぐらい|ほど|も)|何月何日|日付|日にち/.test(normalized);
   if (!asksDate) return null;
+  return dayOffsetInText(normalized);
+}
+
+// 文中の「明日」「おととい」などから何日後か（今日=0）を返す。
+function dayOffsetInText(text) {
+  const normalized = String(text ?? "").replace(/\s+/g, "");
   if (/明々後日|しあさって/.test(normalized)) return 3;
   if (/明後日|あさって/.test(normalized)) return 2;
   if (/明日|あした|あす/.test(normalized)) return 1;
@@ -1862,38 +1873,172 @@ function makeTimeReply(config) {
   return `今の${label}の時刻は${time}だよ。時間確認えらい、どんぐりこもちょっと助かったかも。`;
 }
 
-async function makeWeatherReply(config) {
+// 天気を答えられる地名の一覧。都道府県は県庁所在地の位置を使う。
+// 「東京都」の中の「京都」のように別の地名を含むことがあるので、見つけるときは文の前の方にあるものを優先する。
+const WEATHER_PLACES = [
+  { name: "北海道", lat: 43.0642, lon: 141.3469 },
+  { name: "青森", aliases: ["青森県"], lat: 40.8244, lon: 140.74 },
+  { name: "岩手", aliases: ["岩手県"], lat: 39.7036, lon: 141.1527 },
+  { name: "宮城", aliases: ["宮城県"], lat: 38.2682, lon: 140.8694 },
+  { name: "秋田", aliases: ["秋田県"], lat: 39.7186, lon: 140.1024 },
+  { name: "山形", aliases: ["山形県"], lat: 38.2404, lon: 140.3633 },
+  { name: "福島", aliases: ["福島県"], lat: 37.7503, lon: 140.4676 },
+  { name: "茨城", aliases: ["茨城県"], lat: 36.3418, lon: 140.4468 },
+  { name: "栃木", aliases: ["栃木県"], lat: 36.5657, lon: 139.8836 },
+  { name: "群馬", aliases: ["群馬県"], lat: 36.3911, lon: 139.0608 },
+  { name: "埼玉", aliases: ["埼玉県"], lat: 35.8617, lon: 139.6455 },
+  { name: "千葉", aliases: ["千葉県"], lat: 35.6047, lon: 140.1233 },
+  { name: "東京", aliases: ["東京都"], lat: 35.6812, lon: 139.7671 },
+  { name: "神奈川", aliases: ["神奈川県"], lat: 35.4478, lon: 139.6425 },
+  { name: "新潟", aliases: ["新潟県"], lat: 37.9024, lon: 139.0232 },
+  { name: "富山", aliases: ["富山県"], lat: 36.6953, lon: 137.2113 },
+  { name: "石川", aliases: ["石川県"], lat: 36.5947, lon: 136.6256 },
+  { name: "福井", aliases: ["福井県"], lat: 36.0652, lon: 136.2216 },
+  { name: "山梨", aliases: ["山梨県"], lat: 35.6642, lon: 138.5684 },
+  { name: "長野", aliases: ["長野県"], lat: 36.6513, lon: 138.181 },
+  { name: "岐阜", aliases: ["岐阜県"], lat: 35.3912, lon: 136.7223 },
+  { name: "静岡", aliases: ["静岡県"], lat: 34.9769, lon: 138.3831 },
+  { name: "愛知", aliases: ["愛知県"], lat: 35.1815, lon: 136.9066 },
+  { name: "三重", aliases: ["三重県"], lat: 34.7303, lon: 136.5086 },
+  { name: "滋賀", aliases: ["滋賀県"], lat: 35.0045, lon: 135.8686 },
+  { name: "京都", aliases: ["京都府"], lat: 35.0116, lon: 135.7681 },
+  { name: "大阪", aliases: ["大阪府"], lat: 34.6937, lon: 135.5023 },
+  { name: "兵庫", aliases: ["兵庫県"], lat: 34.6901, lon: 135.1955 },
+  { name: "奈良", aliases: ["奈良県"], lat: 34.6851, lon: 135.8048 },
+  { name: "和歌山", aliases: ["和歌山県"], lat: 34.226, lon: 135.1675 },
+  { name: "鳥取", aliases: ["鳥取県"], lat: 35.5039, lon: 134.2377 },
+  { name: "島根", aliases: ["島根県"], lat: 35.4723, lon: 133.0505 },
+  { name: "岡山", aliases: ["岡山県"], lat: 34.6618, lon: 133.9344 },
+  { name: "広島", aliases: ["広島県"], lat: 34.3853, lon: 132.4553 },
+  { name: "山口", aliases: ["山口県"], lat: 34.1859, lon: 131.4714 },
+  { name: "徳島", aliases: ["徳島県"], lat: 34.0658, lon: 134.5593 },
+  { name: "香川", aliases: ["香川県"], lat: 34.3401, lon: 134.0434 },
+  { name: "愛媛", aliases: ["愛媛県"], lat: 33.8416, lon: 132.7657 },
+  { name: "高知", aliases: ["高知県"], lat: 33.5597, lon: 133.5311 },
+  { name: "福岡", aliases: ["福岡県"], lat: 33.5904, lon: 130.4017 },
+  { name: "佐賀", aliases: ["佐賀県"], lat: 33.2494, lon: 130.2988 },
+  { name: "長崎", aliases: ["長崎県"], lat: 32.7503, lon: 129.8779 },
+  { name: "熊本", aliases: ["熊本県"], lat: 32.8031, lon: 130.7079 },
+  // 「大分寒い（だいぶ寒い）」に反応しないよう、「大分」だけでは拾わない。
+  { name: "大分", aliases: ["大分県", "大分市", "大分の", "大分は", "大分って", "大分で"], bareName: false, lat: 33.2382, lon: 131.6126 },
+  { name: "宮崎", aliases: ["宮崎県"], lat: 31.9111, lon: 131.4239 },
+  { name: "鹿児島", aliases: ["鹿児島県"], lat: 31.5966, lon: 130.5571 },
+  { name: "沖縄", aliases: ["沖縄県"], lat: 26.2124, lon: 127.6809 },
+  { name: "札幌", lat: 43.0642, lon: 141.3469 },
+  { name: "函館", lat: 41.7687, lon: 140.7288 },
+  { name: "旭川", lat: 43.7706, lon: 142.365 },
+  { name: "仙台", lat: 38.2682, lon: 140.8694 },
+  { name: "盛岡", lat: 39.7036, lon: 141.1527 },
+  { name: "水戸", lat: 36.3418, lon: 140.4468 },
+  { name: "宇都宮", lat: 36.5657, lon: 139.8836 },
+  { name: "前橋", lat: 36.3911, lon: 139.0608 },
+  { name: "さいたま", lat: 35.8617, lon: 139.6455 },
+  { name: "横浜", lat: 35.4478, lon: 139.6425 },
+  { name: "川崎", lat: 35.5309, lon: 139.703 },
+  { name: "金沢", lat: 36.5947, lon: 136.6256 },
+  { name: "甲府", lat: 35.6642, lon: 138.5684 },
+  { name: "浜松", lat: 34.7108, lon: 137.7261 },
+  { name: "名古屋", lat: 35.1815, lon: 136.9066 },
+  { name: "神戸", lat: 34.6901, lon: 135.1955 },
+  { name: "松江", lat: 35.4723, lon: 133.0505 },
+  { name: "高松", lat: 34.3401, lon: 134.0434 },
+  { name: "松山", lat: 33.8416, lon: 132.7657 },
+  { name: "北九州", lat: 33.8835, lon: 130.8752 },
+  { name: "那覇", lat: 26.2124, lon: 127.6809 }
+];
+
+// 「〇〇の天気」の〇〇が地名ではないときに使う言葉。これらは設定地点の天気として答える。
+const WEATHER_NON_PLACE_WORDS = /^(日本|今|今日|本日|明日|明後日|明々後日|昨日|一昨日|今週|来週|週末|土日|外|家|地元|近所|現地|現在|最近|今夜|今晩|朝|昼|夜|午前|午後)$/;
+
+// コメントから一覧にある地名を探す。見つからなければ null、一覧にない地名を聞かれたら { unknown: "パリ" } を返す。
+function findWeatherPlace(text) {
+  const normalized = String(text ?? "").replace(/\s+/g, "");
+  let best = null;
+  for (const place of WEATHER_PLACES) {
+    const names = [...(place.aliases ?? []), ...(place.bareName === false ? [] : [place.name])];
+    for (const name of names) {
+      const index = normalized.indexOf(name);
+      if (index < 0) continue;
+      if (!best || index < best.index || (index === best.index && name.length > best.length)) {
+        best = { index, length: name.length, place };
+      }
+    }
+  }
+  if (best) return best.place;
+  const asked = normalized.match(/([一-龠々ァ-ヶーA-Za-z]+)の(天気|気温|予報)/)?.[1];
+  if (asked && !WEATHER_NON_PLACE_WORDS.test(asked)) return { unknown: asked };
+  return null;
+}
+
+async function makeWeatherReply(config, text = "") {
   const weather = config.tools?.weather;
   if (!weather?.enabled) return undefined;
-  const now = Date.now();
-  if (weatherCache.reply && now - weatherCache.at < weather.cacheMs) return weatherCache.reply;
+  const found = findWeatherPlace(text);
+  if (found?.unknown) {
+    return `${found.unknown}の天気は、どんぐりこの地図にまだ載ってないみたい。ごめんね、日本の都道府県や大きな街なら答えられるよ。`;
+  }
+  const place = found ?? {
+    name: weather.locationName || "設定地点",
+    lat: weather.latitude,
+    lon: weather.longitude
+  };
+  // 予報は今日から3日後まで。「昨日」などの過去は、今の天気で答える。
+  const dayOffset = Math.min(Math.max(dayOffsetInText(text), 0), 3);
 
   try {
-    const params = new URLSearchParams({
-      latitude: String(weather.latitude),
-      longitude: String(weather.longitude),
-      current: "temperature_2m,precipitation,weather_code,wind_speed_10m",
-      timezone: weather.timeZone
-    });
-    const url = `https://api.open-meteo.com/v1/forecast?${params}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(7000) });
-    if (!res.ok) throw new Error(`Weather HTTP ${res.status}`);
-    const body = await res.json();
-    const current = body.current ?? {};
-    const temp = Number(current.temperature_2m);
-    const precipitation = Number(current.precipitation ?? 0);
-    const wind = Number(current.wind_speed_10m);
-    const code = Number(current.weather_code);
-    const place = weather.locationName || "設定地点";
-    const condition = describeWeatherCode(code);
-    const rainLine = precipitation > 0 ? `降水は${formatNumber(precipitation)}mmあるみたい。` : "今の降水はほぼなさそう。";
-    const reply = `${place}の今の天気は${condition}、気温は${formatNumber(temp)}度くらいだよ。${rainLine} 風は${formatNumber(wind)}km/hくらい、ふむふむお出かけ前チェックだね。`;
-    weatherCache = { at: now, reply };
-    return reply;
+    const body = await fetchWeather(weather, place);
+    return dayOffset === 0
+      ? currentWeatherReply(place.name, body.current ?? {})
+      : forecastWeatherReply(config, place.name, body.daily ?? {}, dayOffset);
   } catch (error) {
     console.warn(`天気情報の取得に失敗しました: ${error.message}`);
     return "ごめんね、今は天気情報を取りに行けなかったみたい。どんぐりこ、空模様を見に行く前に転んだかも。";
   }
+}
+
+// 今の天気と数日分の予報をまとめて取り、地点ごとにしばらく覚えておく。
+async function fetchWeather(weather, place) {
+  const key = `${place.lat},${place.lon}`;
+  const now = Date.now();
+  const cached = weatherCache.get(key);
+  if (cached && now - cached.at < weather.cacheMs) return cached.body;
+
+  const params = new URLSearchParams({
+    latitude: String(place.lat),
+    longitude: String(place.lon),
+    current: "temperature_2m,precipitation,weather_code,wind_speed_10m",
+    daily: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+    forecast_days: "4",
+    timezone: weather.timeZone
+  });
+  const url = `https://api.open-meteo.com/v1/forecast?${params}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(7000) });
+  if (!res.ok) throw new Error(`Weather HTTP ${res.status}`);
+  const body = await res.json();
+  weatherCache.set(key, { at: now, body });
+  return body;
+}
+
+function currentWeatherReply(placeName, current) {
+  const temp = Number(current.temperature_2m);
+  const precipitation = Number(current.precipitation ?? 0);
+  const wind = Number(current.wind_speed_10m);
+  const condition = describeWeatherCode(Number(current.weather_code));
+  const rainLine = precipitation > 0 ? `降水は${formatNumber(precipitation)}mmあるみたい。` : "今の降水はほぼなさそう。";
+  return `${placeName}の今の天気は${condition}、気温は${formatNumber(temp)}度くらいだよ。${rainLine} 風は${formatNumber(wind)}km/hくらい、ふむふむお出かけ前チェックだね。`;
+}
+
+function forecastWeatherReply(config, placeName, daily, dayOffset) {
+  const pick = (field) => Number(daily[field]?.[dayOffset]);
+  const condition = describeWeatherCode(pick("weather_code"));
+  const max = pick("temperature_2m_max");
+  const min = pick("temperature_2m_min");
+  const rainChance = pick("precipitation_probability_max");
+  const dayLabel = { 1: "明日", 2: "あさって", 3: "しあさって" }[dayOffset];
+  const rainLine = Number.isFinite(rainChance)
+    ? `雨の確率は${Math.round(rainChance)}%で、${rainChance >= 50 ? "傘を持っていくと安心かも" : "傘はたぶんいらなそう"}。`
+    : "";
+  return `${placeName}の${dayLabel}、${formatDateJa(config, dayOffset)}は${condition}の予報だよ。最高${formatNumber(max)}度、最低${formatNumber(min)}度くらい。${rainLine}`;
 }
 
 function formatNumber(value) {
@@ -1910,6 +2055,24 @@ function describeWeatherCode(code) {
   if ([71, 73, 75, 77, 85, 86].includes(code)) return "雪";
   if ([95, 96, 99].includes(code)) return "雷雨";
   return "不明";
+}
+
+async function runWeatherTest(config) {
+  const samples = [
+    "天気教えて",
+    "大阪の天気は？",
+    "明日の札幌の天気",
+    "東京都は雨降ってる？",
+    "京都府の気温は？",
+    "あさって福岡の天気どう？",
+    "大分寒いね",
+    "大分の天気は？",
+    "パリの天気は？",
+    "今日の天気は？"
+  ];
+  for (const sample of samples) {
+    console.log(`${sample} => ${await makeToolReply(config, sample)}`);
+  }
 }
 
 function runPolicyTest(config) {
