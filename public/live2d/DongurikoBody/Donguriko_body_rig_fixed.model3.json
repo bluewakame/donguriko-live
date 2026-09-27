@@ -1,0 +1,10 @@
+{
+	"Version": 3,
+	"FileReferences": {
+		"Moc": "Donguriko_body_rig_fixed.moc3",
+		"Textures": [
+			"Donguriko_body_rig_fixed.2048/texture_00.png"
+		],
+		"DisplayInfo": "Donguriko_body_rig_fixed.cdi3.json"
+	}
+}
