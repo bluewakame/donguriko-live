@@ -11,6 +11,32 @@ export function isEnglishComment(text) {
   return words.length >= 2 || words.some((word) => word.length >= 4);
 }
 
+// 「英語でしゃべって」「スペイン語で話して」「関西弁で言って」「speak Spanish」のような頼みを読む。
+// { language: "英語", dialect: false } を返す。「日本語で」「speak Japanese」は { reset: true }。頼みでなければ null。
+const ASK_VERB = "(?:しゃべ|喋|話|はな|言っ|いっ|言え|いえ|返|答|こたえ|お願い|おねがい|頼|たの|挨拶|あいさつ|自己紹介|よろしく|戻|もど)";
+const JA_LANGUAGE_REQUEST = new RegExp(`([一-龠々ァ-ヶー]{1,10}?)(語|弁)(?:で|に)(?:も|は)?${ASK_VERB}`);
+const EN_LANGUAGE_REQUEST = /\b(?:speak|talk|reply|answer|say(?:\s+\w+)?)\s+(?:to\s+me\s+)?(?:in\s+)?([A-Z][a-z]+)\b|\bin\s+([A-Z][a-z]+)\s*,?\s*please\b/i;
+// 「次は」「今度」などの頭についた言葉は言語名から外す。
+const LEADING_WORDS = /^(?:次|今度|今|また|もう一回|全部|ずっと|一回|少し|ちょっと)/;
+const EN_LANGUAGE_NAMES = new Set(["english", "japanese", "spanish", "french", "german", "italian", "portuguese", "russian", "chinese", "mandarin", "cantonese", "korean", "thai", "vietnamese", "indonesian", "malay", "tagalog", "filipino", "arabic", "hindi", "turkish", "dutch", "polish", "swedish", "greek", "latin"]);
+
+export function parseLanguageRequest(text) {
+  const value = String(text ?? "");
+  const normalized = value.replace(/\s+/g, "");
+  const ja = normalized.match(JA_LANGUAGE_REQUEST);
+  if (ja) {
+    const name = ja[1].replace(LEADING_WORDS, "") || ja[1];
+    if (name === "日本" && ja[2] === "語") return { reset: true };
+    if (name === "標準" || name === "共通") return { reset: true };
+    return { language: `${name}${ja[2]}`, dialect: ja[2] === "弁" };
+  }
+  const en = value.match(EN_LANGUAGE_REQUEST);
+  const name = (en?.[1] || en?.[2] || "").toLowerCase();
+  if (!EN_LANGUAGE_NAMES.has(name)) return null;
+  if (name === "japanese") return { reset: true };
+  return { language: name === "english" ? "英語" : name[0].toUpperCase() + name.slice(1), dialect: false };
+}
+
 export function hasJapanese(text) {
   return JAPANESE_CHARS.test(String(text ?? ""));
 }
@@ -79,7 +105,7 @@ const LETTER_READINGS = {
 export function toJapaneseReading(text) {
   const value = String(text ?? "");
   if (!hasJapanese(value)) return value;
-  return value.replace(/thank\s*you/gi, "サンキュー").replace(/[A-Za-z][A-Za-z0-9-]*/g, (word) => {
+  return value.replace(/thank\s*you/gi, "サンキュー").replace(/[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ0-9-]*/g, (word) => {
     const known = WORD_READINGS[word.toLowerCase()];
     if (known) return known;
     // 「NHK」「BGM」のような大文字だけの短い略語は1文字ずつ読む。
@@ -93,6 +119,6 @@ export function joinSentences(left, right) {
   const a = String(left ?? "");
   const b = String(right ?? "");
   if (!a || !b) return a + b;
-  if (/[A-Za-z0-9][.!?,'")]*$/.test(a) && /^[A-Za-z0-9"'(]/.test(b)) return `${a} ${b}`;
+  if (/[A-Za-zÀ-ÖØ-öø-ÿ0-9][.!?,'")]*$/.test(a) && /^[A-Za-zÀ-ÖØ-öø-ÿ0-9"'(¡¿]/.test(b)) return `${a} ${b}`;
   return a + b;
 }

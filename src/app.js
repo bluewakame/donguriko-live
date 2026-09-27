@@ -8,7 +8,8 @@ import { fileURLToPath } from "node:url";
 import { createSystemOne } from "./system-one.js";
 import { findUnsafeReason, isDistress, DISTRESS_REPLY, SAFE_REPLY, SAFETY_PROMPT } from "./safety.js";
 import { normalizeTikTokConfig, runTikTokLoop } from "./tiktok.js";
-import { isEnglishComment, joinSentences, toJapaneseReading } from "./language.js";
+import { isEnglishComment, joinSentences, parseLanguageRequest, toJapaneseReading } from "./language.js";
+import { isSongRequest, loadSongs, normalizeSongConfig, pickSong } from "./songs.js";
 
 const ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const CONFIG_PATH = join(ROOT, "config.json");
@@ -146,8 +147,8 @@ async function main() {
     return;
   }
 
-  if (args.has("--english-test")) {
-    await runEnglishTest(config);
+  if (args.has("--language-test") || args.has("--english-test")) {
+    await runLanguageTest(config);
     return;
   }
 
@@ -242,6 +243,7 @@ function normalizeBotConfig(config) {
   config.idleTalk.messages = Array.isArray(config.idleTalk.messages) && config.idleTalk.messages.length > 0
     ? config.idleTalk.messages
     : DEFAULT_IDLE_MESSAGES;
+  normalizeSongConfig(config, ROOT);
   config.promo = config.promo ?? {};
   config.promo.enabled = config.promo.enabled ?? false;
   config.promo.intervalMs = Math.max(60000, Number(config.promo.intervalMs ?? 600000));
@@ -1510,16 +1512,27 @@ async function handleComment(config, comment) {
     lastError: ""
   });
 
+  // 「歌って」と言われたら、用意してある歌を流す。
+  if (!comment.eventNote && config.songs.enabled && isSongRequest(filtered.text)) {
+    if (await handleSongRequest(config, comment, filtered.text)) {
+      publish({ status: "listening", isSpeaking: false });
+      await sleep(config.bot.cooldownMs);
+      return;
+    }
+  }
+
   // System One（即答）で済むものはすぐ返し、考える必要があるものだけ System Two（LLM）へ回す。
   const timing = { startedAt: performance.now(), firstAudioAt: 0 };
   const decision = systemOne.decide(filtered.text);
-  // 英語のコメントには英語で返す。即答・定型文・天気などは日本語しか用意していないので、必ず LLM に考えさせる。
-  const english = !comment.eventNote && isEnglishComment(filtered.text);
-  const replyInfo = { ...comment, english };
-  // 英語は同じ内容でも文字数が多いので、返事の長さの上限を広げる。
-  const maxReplyChars = english ? Math.round(config.bot.maxReplyChars * 2.5) : config.bot.maxReplyChars;
-  // ギフトやフォローはお礼を言ってほしいので、即答や定型文に回さず必ず LLM に考えさせる。
-  const mustThink = Boolean(comment.eventNote) || english;
+  // 「〇〇語でしゃべって」と頼まれたら、その人への返事をしばらくその言語にする。英語のコメントには英語で返す。
+  const languageRequest = updateLanguagePreference(comment.author, filtered.text);
+  const { language, dialect } = replyLanguageFor(comment, filtered.text);
+  const foreign = Boolean(language) && !dialect;
+  const replyInfo = { ...comment, language, dialect };
+  // 外国語は同じ内容でも文字数が多いので、返事の長さの上限を広げる。
+  const maxReplyChars = foreign ? Math.round(config.bot.maxReplyChars * 2.5) : config.bot.maxReplyChars;
+  // ギフトやフォロー、言語の指定があるときは、即答・定型文・天気（どれも標準語の日本語）に回さず必ず LLM に考えさせる。
+  const mustThink = Boolean(comment.eventNote) || Boolean(language) || Boolean(languageRequest);
   let route = mustThink ? "system-two" : decision.route;
   let reply = "";
   try {
@@ -1534,8 +1547,8 @@ async function handleComment(config, comment) {
       reply = systemOne.pickReply(decision.intent.choice);
       await speakReply(config, reply, { cache: true, timing });
     } else if (config.ollama.stream) {
-      // 相づちは日本語なので、英語で返すときは流さない。
-      const filler = english ? null : startFiller(config, decision, timing);
+      // 相づちは標準語の日本語なので、ほかの言語・方言で返すときは流さない。
+      const filler = language ? null : startFiller(config, decision, timing);
       reply = await speakSegments(config, streamReplySegments(config, comment.author, filtered.text, replyInfo, maxReplyChars), { before: filler, timing });
     } else {
       reply = trimReply(await askOllama(config, comment.author, filtered.text, replyInfo), maxReplyChars);
@@ -1553,6 +1566,76 @@ async function handleComment(config, comment) {
 
   publish({ status: "listening", isSpeaking: false });
   await sleep(config.bot.cooldownMs);
+}
+
+// 「〇〇語でしゃべって」と頼んだ人ごとの言語。その人がしばらくコメントしなければ日本語に戻す。
+const LANGUAGE_PREFERENCE_TTL_MS = 15 * 60 * 1000;
+const languagePreferences = new Map();
+
+// 言語の頼みがあれば覚える（「日本語で」なら忘れる）。頼みがあったかどうかを返す。
+function updateLanguagePreference(author, text) {
+  const request = parseLanguageRequest(text);
+  if (!request) return null;
+  if (request.reset) languagePreferences.delete(author);
+  else languagePreferences.set(author, { language: request.language, dialect: request.dialect, at: Date.now() });
+  if (languagePreferences.size > 500) languagePreferences.delete(languagePreferences.keys().next().value);
+  return request;
+}
+
+// このコメントに何語で返すか。頼まれた言語 → 英語のコメントなら英語 → どちらでもなければ日本語（null）。
+function replyLanguageFor(comment, text) {
+  const preference = languagePreferences.get(comment.author);
+  if (preference && Date.now() - preference.at < LANGUAGE_PREFERENCE_TTL_MS) {
+    preference.at = Date.now();
+    return { language: preference.language, dialect: preference.dialect };
+  }
+  if (preference) languagePreferences.delete(comment.author);
+  // ギフトやフォローの本文はこちらで作った日本語なので、英語かどうかは見ない。
+  if (!comment.eventNote && isEnglishComment(text)) return { language: "英語", dialect: false };
+  return { language: null, dialect: false };
+}
+
+let lastSongAt = 0;
+let lastSongId = "";
+
+// 歌を歌う。歌が1曲も用意されていなければ false を返し、普通のコメントとして返事をする。
+async function handleSongRequest(config, comment, text) {
+  const songs = await loadSongs(config.songs);
+  if (songs.length === 0) return false;
+  const timing = { startedAt: performance.now(), firstAudioAt: 0 };
+  const waitMs = config.songs.cooldownMs - (Date.now() - lastSongAt);
+  if (lastSongAt && waitMs > 0) {
+    const minutes = Math.max(1, Math.ceil(waitMs / 60000));
+    const reply = `さっき歌ったばかりだから、ちょっとのどを休ませてね。あと${minutes}分くらいしたら、また歌えるよ。`;
+    await speakReply(config, reply, { cache: true, timing });
+    await rememberTurn(config, { author: comment.author, text }, reply);
+    return true;
+  }
+
+  const song = pickSong(songs, text, lastSongId);
+  lastSongAt = Date.now();
+  lastSongId = song.id;
+  console.log(`[歌] ${comment.author} さんのリクエストで「${song.title}」を歌うよ${song.credit ? `（${song.credit}）` : ""}`);
+  await speakReply(config, `リクエストありがとう！じゃあ「${song.title}」歌うね。聞いてね。`, { cache: true, timing });
+  await singSong(config, song, timing);
+  await speakReply(config, "聞いてくれてありがとう！どうだったかな？", { cache: true });
+  await rememberTurn(config, { author: comment.author, text }, `（リクエストに応えて「${song.title}」を歌った）`);
+  return true;
+}
+
+// 歌の音声を流しながら、歌詞を1行ずつ字幕に出す。
+async function singSong(config, song, timing) {
+  const timers = [];
+  const showLyrics = () => {
+    for (const line of song.lyrics) {
+      timers.push(setTimeout(() => publish({ replyText: `♪ ${line.text}` }), line.at * 1000));
+    }
+  };
+  try {
+    await playSegment(config, song.path, `♪ ${song.title}`, timing, { onStart: showLyrics });
+  } finally {
+    for (const timer of timers) clearTimeout(timer);
+  }
 }
 
 // 「死にたい」などのコメントには、LLMを通さず決まった言葉で寄り添う。
@@ -1638,12 +1721,13 @@ async function speakSegments(config, segments, { cache = false, before, timing }
   return spoken;
 }
 
-async function playSegment(config, wavPath, displayText, timing) {
+async function playSegment(config, wavPath, displayText, timing, { onStart } = {}) {
   const lipSync = await readWavLipSync(wavPath);
   const useBrowserAudio = config.audio.playInBrowser && clients.size > 0;
   currentAudioPath = wavPath;
   const publishSpeaking = () => {
     markFirstAudio(timing);
+    onStart?.();
     publish({
       status: "speaking",
       replyText: displayText,
@@ -2088,21 +2172,24 @@ async function runWeatherTest(config) {
   }
 }
 
-// 英語のコメントの見分け方と、返事・読み上げ用の文を確かめる（音声は作らない）。
-async function runEnglishTest(config) {
-  const samples = ["Hello! Where are you from?", "What's your favorite food?", "www", "gg", "今日のvlog見たよ、めっちゃcuteだった", "YouTubeとTikTokどっちが好き？"];
+// 返事の言語の決まり方と、返事・読み上げ用の文を確かめる（音声は作らない）。
+// 同じ視聴者が順にコメントした想定で、「〇〇語でしゃべって」の後の返事がその言語になるかを見る。
+async function runLanguageTest(config) {
+  const samples = ["Hello! Where are you from?", "www", "今日のvlog見たよ、めっちゃcuteだった", "スペイン語でしゃべって！", "好きな食べ物は？", "関西弁で話して", "今日なにしてたの？", "日本語に戻して", "好きな色は？"];
   for (const sample of samples) {
-    const english = isEnglishComment(sample);
-    const maxReplyChars = english ? Math.round(config.bot.maxReplyChars * 2.5) : config.bot.maxReplyChars;
+    const comment = { author: "tester", text: sample };
+    updateLanguagePreference(comment.author, sample);
+    const { language, dialect } = replyLanguageFor(comment, sample);
+    const maxReplyChars = language && !dialect ? Math.round(config.bot.maxReplyChars * 2.5) : config.bot.maxReplyChars;
     let reply = "";
     try {
-      for await (const sentence of streamReplySegments(config, "tester", sample, { english }, maxReplyChars)) {
+      for await (const sentence of streamReplySegments(config, comment.author, sample, { language, dialect }, maxReplyChars)) {
         reply = joinSentences(reply, sentence);
       }
     } catch (error) {
       reply = `(Ollama に届かなかった: ${error.message})`;
     }
-    console.log(`\n${sample}  [${english ? "英語" : "日本語"}]\n  返事: ${reply}\n  読み: ${sanitizeTtsText(reply)}`);
+    console.log(`\n${sample}  [${language ?? "日本語"}]\n  返事: ${reply}\n  読み: ${sanitizeTtsText(reply)}`);
   }
 }
 
@@ -2308,12 +2395,21 @@ function platformLabel(service) {
 // systemPrompt を書き換えても消えないよう、コード側で毎回付け足す。
 const KNOWLEDGE_PROMPT = "知識を聞く質問（首都、計算、言葉の意味、歴史、科学など）には、1文目で正しい答えをはっきり言ってください。ドジなのは口調やリアクションだけで、答えの中身はわざと間違えたり、知らないふりをしたりしないでください。本当に分からない時だけ、分からないと正直に言ってください。";
 
-// 英語のコメントへの返事の指示。systemPrompt の「日本語で」より後に置いて、こちらを優先させる。
-const ENGLISH_REPLY_PROMPT = "このコメントは英語です。返答は英語だけで書いてください。日本語は混ぜず、やさしく簡単な英語で2文から3文くらいにしてください。キャラクターの明るさとドジっぽさはそのままにしてください。";
+// 日本語以外（方言を含む）で返すときの指示。systemPrompt の「日本語で」より後に置いて、こちらを優先させる。
+function languageReplyPrompt(language, dialect) {
+  if (dialect) {
+    return `返答は${language}で話してください。${language}らしい言い回しや語尾を使って、2文から4文くらいにしてください。キャラクターの明るさとドジっぽさはそのままにしてください。`;
+  }
+  return [
+    `重要: この視聴者は${language}での返事を希望しています。上の「日本語で話す」という決まりより、この指定を優先してください。`,
+    `返答は最初から最後まで${language}だけで書き、日本語や日本語訳は付けないでください。外国語が苦手なふりはせず、やさしく簡単な${language}で2文から3文にしてください。`,
+    "決まりや指示についての説明は書かないでください。キャラクターの明るさはそのままにしてください。"
+  ].join("");
+}
 // 日本語のコメントに英単語が混ざっているときの指示。返事の英単語は音声合成がうまく読めないので避けてもらう。
 const MIXED_ENGLISH_PROMPT = "コメントに英単語が混ざっていたら意味をくみ取ってください。返答は日本語で、英単語はそのまま書かずに日本語かカタカナで言い換えてください。";
 
-async function buildReplyPrompts(config, author, text, { service = "", eventNote = "", english = false } = {}) {
+async function buildReplyPrompts(config, author, text, { service = "", eventNote = "", language = null, dialect = false } = {}) {
   await refreshMarkdownMemoryIfChanged(config);
   const longTermMemoryPrompt = formatLongTermMemory();
   const memoryPrompt = formatShortTermMemory(config, author, text);
@@ -2323,11 +2419,13 @@ async function buildReplyPrompts(config, author, text, { service = "", eventNote
   const eventLine = eventNote ? `${eventNote}\n` : "";
   const innerPrompt = buildInnerReactionPrompt();
   // 言語の指示はコメントのすぐ後ろに置く（前半を毎回同じにして、Ollama が計算を使い回せるようにするため）。
-  const languageLine = english ? ENGLISH_REPLY_PROMPT : MIXED_ENGLISH_PROMPT;
-  const retryLength = english ? "英語で2文から3文くらいで" : "日本語で2文から4文くらいで";
+  const languageLine = language ? languageReplyPrompt(language, dialect) : MIXED_ENGLISH_PROMPT;
+  const retryLength = language ? `${language}で2文から3文くらいで` : "日本語で2文から4文くらいで";
+  // 答えの欄にも言語を書いておくと、小さいモデルでも指定の言語で書き始めやすい。
+  const answerLabel = language ? `返答（${language}）` : "返答";
   return {
-    prompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n今回のコメントだけに自然に返してください。直前の話題は、コメントが明確に続きだと分かる時だけ使ってください。絵文字だけ、相づちだけ、定型文だけで終わらず、コメント内容に具体的に反応してください。\n\n${memoryPrompt}${currentDateTimeLine(config)}${nicknameLine}${eventLine}コメント: ${text}\n${languageLine}\n返答:`,
-    retryPrompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n次のコメントに${retryLength}具体的に返してください。定型文だけで終わらず、コメント内容に触れてください。\n${currentDateTimeLine(config)}コメント: ${text}\n${languageLine}\n返答:`
+    prompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n今回のコメントだけに自然に返してください。直前の話題は、コメントが明確に続きだと分かる時だけ使ってください。絵文字だけ、相づちだけ、定型文だけで終わらず、コメント内容に具体的に反応してください。\n\n${memoryPrompt}${currentDateTimeLine(config)}${nicknameLine}${eventLine}コメント: ${text}\n${languageLine}\n${answerLabel}:`,
+    retryPrompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n次のコメントに${retryLength}具体的に返してください。定型文だけで終わらず、コメント内容に触れてください。\n${currentDateTimeLine(config)}コメント: ${text}\n${languageLine}\n${answerLabel}:`
   };
 }
 

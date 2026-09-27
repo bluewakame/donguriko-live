@@ -37,6 +37,11 @@
     "cooldownMs": 300000,
     "message": "見に来てくれた人が増えたみたい。よかったら気軽にコメントしてね、どんぐりこ待ってるよ。"
   },
+  "songs": {
+    "enabled": true,
+    "dir": "songs",
+    "cooldownMs": 300000
+  },
   "promo": {
     "enabled": false,
     "intervalMs": 600000,
