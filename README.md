@@ -74,13 +74,16 @@ http://127.0.0.1:8790
 
 | 場所 | 中身 |
 | --- | --- |
-| `public/live2d/Donguriko/` | ランタイムモデル一式（`Donguriko.model3.json` / `.moc3` / `.cdi3.json` / `Donguriko.2048/texture_00.png`） |
+| `public/live2d/DongurikoArms/` | 既定のモデル（腕つき）。`Donguriko_arms_rig.model3.json` ほか |
+| `public/live2d/Donguriko/` | 従来の顔だけ動くモデル。URL に `?avatar=face` を付けると使う |
+| `public/live2d/DongurikoMcp/` | 全身モデル。URL に `?avatar=body` を付けると使う |
+| `public/live2d/DongurikoBody/` `DongurikoBodyFace/` | 作業中のモデル（今はコードから使っていない） |
 | `public/vendor/` | Live2D Cubism Core・PixiJS 6.5.10・pixi-live2d-display 0.4.0（同梱済みなのでオフラインでも動作） |
 | `public/live2d.js` | モデルの読み込みとパラメータ制御 |
 
 モデルの元データ（`.cmo3` / `.psd`）は `Documents\Codex\2026-09-06\Live2DDonguriko\outputs\Donguriko_Live2D` にあります。Cubismで編集して書き出したら、書き出しフォルダの中身を `public/live2d/Donguriko/` へ上書きしてください。
 
-動かしているパラメータは次の6つです。まばたきは `model3.json` の EyeBlink グループを使ってライブラリ側が自動で行います。
+主に動かしているパラメータは次のとおりです。まばたきは `model3.json` の EyeBlink グループを使ってライブラリ側が自動で行います。
 
 | 動き | パラメータ | 駆動元 |
 | --- | --- | --- |
@@ -88,6 +91,8 @@ http://127.0.0.1:8790
 | 首の左右・上下 | `ParamAngleX` / `ParamAngleY` | 視線ターゲット（自動＋キーボード操作） |
 | 首の傾き | `ParamAngleZ` | ゆっくりした揺れ（しゃべっている間は少し大きく） |
 | まばたき | `ParamEyeLOpen` / `ParamEyeROpen` | 自動 |
+| 体の左右ゆれ・呼吸 | `ParamBodyAngleX` / `ParamBreath` | ゆっくりした揺れ（しゃべっている間は少し大きく） |
+| 腕の身振り（腕つきモデルのみ） | `ParamArmRAngle` / `ParamArmLAngle` / `ParamElbowR` / `ParamElbowL` | しゃべっている間は大きく、左右で少し時間差を付ける |
 
 現在のモデルには物理演算ファイル（`.physics3.json`）とモーション（`.motion3.json`）が無いため、髪やしっぽの揺れ・表情差分はありません。Cubismで追加すればそのまま反映されます。
 
@@ -198,6 +203,16 @@ TypeSafe AI の Jev（文章を生成せず、決まった型の質問に確率�
 | `audio.persistentPlayer` | `true` | 常駐プレイヤーを使うか |
 
 常駐プレイヤーでは音が鳴り始めた瞬間に口パクを始めるので、口の動きが遅れて見える場合は `audio.lipSyncOffsetMs` を小さくしてください。
+
+## 英語のコメント
+
+- かな・漢字がなく、英単語が2つ以上か4文字以上の英単語があるコメント（`Hello!`、`Where are you from?` など）は英語のコメントとして、英語で返事をします。
+- `gg` `lol` `www` のような短いものは日本語のコメントとして扱います。
+- 英語のコメントには、即答・定型文・天気などは使わず、必ずAIが考えて返します。相づち（フィラー）も流しません。返事の長さの上限は、英語は文字数が多くなるので日本語の2.5倍にしています。
+- 日本語のコメントに英単語が混ざっているとき（`今日のvlog見たよ` など）は、意味をくみ取って日本語で返し、返事の英単語は日本語かカタカナで言い換えるようAIに伝えています。
+- それでも返事の日本語の文に英単語が残ったときは、読み上げだけカタカナに直します（YouTube→ユーチューブ、OK→オーケー、NHK→エヌエイチケー など。一覧は `src/language.js`）。画面の字幕は元の表記のままです。
+- 音声合成は日本語向けなので、英語の返事の発音は日本語なまりになります。
+- 確かめるときは `node src/app.js --english-test`（Ollama を起動しておく。音声は作りません）。
 
 ## 危ないコメントへの対策（安全フィルター）
 
