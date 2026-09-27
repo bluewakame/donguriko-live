@@ -33,3 +33,6 @@ public/assets/zundamon.png
 
 # Live2D 書き出し時の検証ログ。作業PCのパスが入るため公開しない
 public/live2d/**/runtime-validation.json
+
+# 歌の音声。VOICEVOX の歌声などを元にしているので公開しない（一覧の songs.json だけ入れる）
+songs/*.wav
