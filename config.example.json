@@ -17,6 +17,7 @@
     "signApiKey": "",
     "replyToGifts": true,
     "minGiftDiamonds": 0,
+    "gifts": {},
     "replyToFollows": true,
     "reconnectIntervalMs": 10000,
     "offlineRetryMs": 60000
