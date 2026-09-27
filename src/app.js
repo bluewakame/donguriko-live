@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { createSystemOne } from "./system-one.js";
 import { findUnsafeReason, isDistress, DISTRESS_REPLY, SAFE_REPLY, SAFETY_PROMPT } from "./safety.js";
 import { normalizeTikTokConfig, runTikTokLoop } from "./tiktok.js";
+import { isEnglishComment, joinSentences, toJapaneseReading } from "./language.js";
 
 const ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const CONFIG_PATH = join(ROOT, "config.json");
@@ -142,6 +143,11 @@ async function main() {
 
   if (args.has("--weather-test")) {
     await runWeatherTest(config);
+    return;
+  }
+
+  if (args.has("--english-test")) {
+    await runEnglishTest(config);
     return;
   }
 
@@ -1507,12 +1513,18 @@ async function handleComment(config, comment) {
   // System One（即答）で済むものはすぐ返し、考える必要があるものだけ System Two（LLM）へ回す。
   const timing = { startedAt: performance.now(), firstAudioAt: 0 };
   const decision = systemOne.decide(filtered.text);
+  // 英語のコメントには英語で返す。即答・定型文・天気などは日本語しか用意していないので、必ず LLM に考えさせる。
+  const english = !comment.eventNote && isEnglishComment(filtered.text);
+  const replyInfo = { ...comment, english };
+  // 英語は同じ内容でも文字数が多いので、返事の長さの上限を広げる。
+  const maxReplyChars = english ? Math.round(config.bot.maxReplyChars * 2.5) : config.bot.maxReplyChars;
   // ギフトやフォローはお礼を言ってほしいので、即答や定型文に回さず必ず LLM に考えさせる。
-  let route = comment.eventNote ? "system-two" : decision.route;
+  const mustThink = Boolean(comment.eventNote) || english;
+  let route = mustThink ? "system-two" : decision.route;
   let reply = "";
   try {
-    const canned = comment.eventNote ? undefined : makeCannedReply(filtered.text);
-    const toolReply = canned || comment.eventNote ? undefined : await makeToolReply(config, filtered.text);
+    const canned = mustThink ? undefined : makeCannedReply(filtered.text);
+    const toolReply = canned || mustThink ? undefined : await makeToolReply(config, filtered.text);
     if (canned || toolReply) {
       route = canned ? "canned" : "tool";
       // 定型文は trimReply を通すと「どんぐりこだよ。」が自己紹介除去で消えてしまうのでそのまま使う。
@@ -1522,10 +1534,11 @@ async function handleComment(config, comment) {
       reply = systemOne.pickReply(decision.intent.choice);
       await speakReply(config, reply, { cache: true, timing });
     } else if (config.ollama.stream) {
-      const filler = startFiller(config, decision, timing);
-      reply = await speakSegments(config, streamReplySegments(config, comment.author, filtered.text, comment), { before: filler, timing });
+      // 相づちは日本語なので、英語で返すときは流さない。
+      const filler = english ? null : startFiller(config, decision, timing);
+      reply = await speakSegments(config, streamReplySegments(config, comment.author, filtered.text, replyInfo, maxReplyChars), { before: filler, timing });
     } else {
-      reply = trimReply(await askOllama(config, comment.author, filtered.text, comment), config.bot.maxReplyChars);
+      reply = trimReply(await askOllama(config, comment.author, filtered.text, replyInfo), maxReplyChars);
       const unsafe = isUnsafeReply(config, reply);
       if (unsafe) reply = SAFE_REPLY;
       await speakReply(config, reply, { cache: unsafe, timing });
@@ -1613,7 +1626,7 @@ async function speakSegments(config, segments, { cache = false, before, timing }
   if (before) await before;
   let spoken = "";
   for await (const item of ready) {
-    spoken += item.text;
+    spoken = joinSentences(spoken, item.text);
     if (item.wavPath) {
       await playSegment(config, item.wavPath, spoken, timing);
     } else {
@@ -2075,6 +2088,24 @@ async function runWeatherTest(config) {
   }
 }
 
+// 英語のコメントの見分け方と、返事・読み上げ用の文を確かめる（音声は作らない）。
+async function runEnglishTest(config) {
+  const samples = ["Hello! Where are you from?", "What's your favorite food?", "www", "gg", "今日のvlog見たよ、めっちゃcuteだった", "YouTubeとTikTokどっちが好き？"];
+  for (const sample of samples) {
+    const english = isEnglishComment(sample);
+    const maxReplyChars = english ? Math.round(config.bot.maxReplyChars * 2.5) : config.bot.maxReplyChars;
+    let reply = "";
+    try {
+      for await (const sentence of streamReplySegments(config, "tester", sample, { english }, maxReplyChars)) {
+        reply = joinSentences(reply, sentence);
+      }
+    } catch (error) {
+      reply = `(Ollama に届かなかった: ${error.message})`;
+    }
+    console.log(`\n${sample}  [${english ? "英語" : "日本語"}]\n  返事: ${reply}\n  読み: ${sanitizeTtsText(reply)}`);
+  }
+}
+
 function runPolicyTest(config) {
   const samples = [
     "名前は？",
@@ -2277,7 +2308,12 @@ function platformLabel(service) {
 // systemPrompt を書き換えても消えないよう、コード側で毎回付け足す。
 const KNOWLEDGE_PROMPT = "知識を聞く質問（首都、計算、言葉の意味、歴史、科学など）には、1文目で正しい答えをはっきり言ってください。ドジなのは口調やリアクションだけで、答えの中身はわざと間違えたり、知らないふりをしたりしないでください。本当に分からない時だけ、分からないと正直に言ってください。";
 
-async function buildReplyPrompts(config, author, text, { service = "", eventNote = "" } = {}) {
+// 英語のコメントへの返事の指示。systemPrompt の「日本語で」より後に置いて、こちらを優先させる。
+const ENGLISH_REPLY_PROMPT = "このコメントは英語です。返答は英語だけで書いてください。日本語は混ぜず、やさしく簡単な英語で2文から3文くらいにしてください。キャラクターの明るさとドジっぽさはそのままにしてください。";
+// 日本語のコメントに英単語が混ざっているときの指示。返事の英単語は音声合成がうまく読めないので避けてもらう。
+const MIXED_ENGLISH_PROMPT = "コメントに英単語が混ざっていたら意味をくみ取ってください。返答は日本語で、英単語はそのまま書かずに日本語かカタカナで言い換えてください。";
+
+async function buildReplyPrompts(config, author, text, { service = "", eventNote = "", english = false } = {}) {
   await refreshMarkdownMemoryIfChanged(config);
   const longTermMemoryPrompt = formatLongTermMemory();
   const memoryPrompt = formatShortTermMemory(config, author, text);
@@ -2286,9 +2322,12 @@ async function buildReplyPrompts(config, author, text, { service = "", eventNote
   const nicknameLine = nickname ? `ニックネーム: ${nickname}${platform ? `（${platform}の視聴者）` : ""}\n` : "";
   const eventLine = eventNote ? `${eventNote}\n` : "";
   const innerPrompt = buildInnerReactionPrompt();
+  // 言語の指示はコメントのすぐ後ろに置く（前半を毎回同じにして、Ollama が計算を使い回せるようにするため）。
+  const languageLine = english ? ENGLISH_REPLY_PROMPT : MIXED_ENGLISH_PROMPT;
+  const retryLength = english ? "英語で2文から3文くらいで" : "日本語で2文から4文くらいで";
   return {
-    prompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n今回のコメントだけに自然に返してください。直前の話題は、コメントが明確に続きだと分かる時だけ使ってください。絵文字だけ、相づちだけ、定型文だけで終わらず、コメント内容に具体的に反応してください。\n\n${memoryPrompt}${currentDateTimeLine(config)}${nicknameLine}${eventLine}コメント: ${text}\n返答:`,
-    retryPrompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n次のコメントに日本語で2文から4文くらいで具体的に返してください。定型文だけで終わらず、コメント内容に触れてください。\n${currentDateTimeLine(config)}コメント: ${text}\n返答:`
+    prompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n今回のコメントだけに自然に返してください。直前の話題は、コメントが明確に続きだと分かる時だけ使ってください。絵文字だけ、相づちだけ、定型文だけで終わらず、コメント内容に具体的に反応してください。\n\n${memoryPrompt}${currentDateTimeLine(config)}${nicknameLine}${eventLine}コメント: ${text}\n${languageLine}\n返答:`,
+    retryPrompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n次のコメントに${retryLength}具体的に返してください。定型文だけで終わらず、コメント内容に触れてください。\n${currentDateTimeLine(config)}コメント: ${text}\n${languageLine}\n返答:`
   };
 }
 
@@ -2306,10 +2345,10 @@ async function askOllama(config, author, text, commentInfo) {
 }
 
 // LLM の返事を1文ずつ取り出す。全文が出来上がるのを待たずに、1文目から音声合成へ回せる。
-async function* streamReplySegments(config, author, text, commentInfo) {
+async function* streamReplySegments(config, author, text, commentInfo, maxReplyChars = config.bot.maxReplyChars) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.ollama.timeoutMs);
-  const cleaner = createReplyCleaner(config.bot.maxReplyChars);
+  const cleaner = createReplyCleaner(maxReplyChars);
   let emitted = 0;
   try {
     const { prompt, retryPrompt } = await buildReplyPrompts(config, author, text, commentInfo);
@@ -2398,7 +2437,8 @@ async function* streamOllamaSentences(config, prompt, signal) {
 
 // 「。！？」で区切る。短すぎる文（「えへへ！」など）は次の文とまとめて、音声が細切れにならないようにする。
 function findSentenceCut(text, minChars = 8, maxChars = 60) {
-  const pattern = /[。！？!?\n]+[」』）)]*/g;
+  // 英語の「.」は、後ろに空白が来たときだけ文の終わりとみなす（「3.5」で切らない）。
+  const pattern = /[。！？!?\n]+[」』）)]*|\.+(?=\s)/g;
   let match;
   while ((match = pattern.exec(text)) !== null) {
     const end = match.index + match[0].length;
@@ -2406,14 +2446,18 @@ function findSentenceCut(text, minChars = 8, maxChars = 60) {
     if (text.slice(0, end).trim().length >= minChars) return end;
   }
   if (text.length > maxChars) {
-    const comma = text.lastIndexOf("、", maxChars);
-    return comma > minChars ? comma + 1 : maxChars;
+    const head = text.slice(0, maxChars);
+    const comma = Math.max(head.lastIndexOf("、"), head.lastIndexOf(","));
+    if (comma > minChars) return comma + 1;
+    // 英語は単語の途中で切らない。
+    const space = head.lastIndexOf(" ");
+    return space > minChars ? space + 1 : maxChars;
   }
   return 0;
 }
 
 function splitSentences(text) {
-  return String(text ?? "").split(/(?<=[。！？!?\n])/).filter((sentence) => sentence.trim());
+  return String(text ?? "").split(/(?<=[。！？!?\n])|(?<=\.)(?=\s)/).filter((sentence) => sentence.trim());
 }
 
 // trimReply と同じ後処理を1文ずつ行う。文字数の上限を超える文は途中で切らずに丸ごと落とす。
@@ -2545,7 +2589,7 @@ function removeRepetitivePhrases(text) {
   }
 
   return uniqueSentences
-    .join("")
+    .reduce(joinSentences, "")
     .replace(/(.{2,12})(?:\s*\1){2,}/g, "$1")
     .replace(/(えへへ|あわわ|うんうん|そうそう|ありがとう|ごめんね)(?:[、。\s]*\1){1,}/g, "$1")
     .replace(/\s+/g, " ")
@@ -2569,8 +2613,9 @@ function sanitizeCommentText(text) {
   return stripEmojiAndUnsafeText(text);
 }
 
+// 日本語の文に混ざった英単語は、音声合成が読みやすいようカタカナにしてから渡す。
 function sanitizeTtsText(text) {
-  return stripEmojiAndUnsafeText(text) || "OK";
+  return toJapaneseReading(stripEmojiAndUnsafeText(text)) || "OK";
 }
 
 function stripEmojiAndUnsafeText(text) {
