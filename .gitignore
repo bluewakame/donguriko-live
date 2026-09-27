@@ -30,3 +30,6 @@ public/assets/donguriko-face-blink.png
 public/assets/donguriko-face-mouth-open.png
 public/assets/donguriko-face-neutral.png
 public/assets/zundamon.png
+
+# Live2D 書き出し時の検証ログ。作業PCのパスが入るため公開しない
+public/live2d/**/runtime-validation.json

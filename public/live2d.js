@@ -1,14 +1,18 @@
 // Live2D (Cubism 4/5) 表示レイヤー。
 // 依存: /vendor/live2dcubismcore.min.js, /vendor/pixi.min.js, /vendor/cubism4.min.js
-// モデル: /live2d/Donguriko/Donguriko.model3.json
+// 既定モデル: /live2d/DongurikoArms/Donguriko_arms_rig.model3.json
+// 従来の顔可動モデルへ戻す場合: URLに ?avatar=face を付ける
 //
-// このモデルで実際に変形が入っているのは6パラメータ:
-//   ParamAngleX / ParamAngleY / ParamAngleZ / ParamEyeLOpen / ParamEyeROpen / ParamMouthOpenY
-// まばたきは model3.json の EyeBlink グループを使ってライブラリ側が自動で行う。
-// 呼吸ゆれ(updateNaturalMovements)も内部で ParamAngle* に加算される。
+// 統合モデルでは ParamBodyAngleX / ParamEye* / ParamMouthOpenY が同時に動く。
 
 const DongurikoLive2D = (() => {
-  const MODEL_URL = "/live2d/Donguriko/Donguriko.model3.json";
+  const requestedAvatar = new URLSearchParams(window.location.search).get("avatar");
+  const avatarMode = ["face", "body"].includes(requestedAvatar) ? requestedAvatar : "arms";
+  const MODEL_URL = avatarMode === "face"
+    ? "/live2d/Donguriko/Donguriko.model3.json"
+    : avatarMode === "body"
+      ? "/live2d/DongurikoMcp/Donguriko_mcp_full_rig.model3.json"
+      : "/live2d/DongurikoArms/Donguriko_arms_rig.model3.json";
   const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 
   const target = { lookX: 0, lookY: 0, mouth: 0, speaking: false };
@@ -17,6 +21,9 @@ const DongurikoLive2D = (() => {
   let ready = false;
   let mouthShown = 0;
   let tiltPhase = 0;
+  let breathPhase = 0;
+  let gesturePhase = 0;
+  let gestureStrength = 0;
   let lastFrameAt = 0;
   let placement = { scale: 1, x: 0.5, y: 1, extra: 1 };
 
@@ -44,7 +51,7 @@ const DongurikoLive2D = (() => {
 
     // 口: 音量エンベロープを追従（開くのは速く、閉じるのはやや遅く）
     const wanted = clamp(target.mouth, 0, 1);
-    const rate = wanted > mouthShown ? 0.55 : 0.28;
+    const rate = 1 - Math.exp(-dt * (wanted > mouthShown ? 48 : 20));
     mouthShown += (wanted - mouthShown) * rate;
     core.setParameterValueById("ParamMouthOpenY", clamp(mouthShown, 0, 1));
 
@@ -56,6 +63,28 @@ const DongurikoLive2D = (() => {
     tiltPhase += dt * (target.speaking ? 1.9 : 0.9);
     const tilt = Math.sin(tiltPhase) * (target.speaking ? 9 : 5);
     core.setParameterValueById("ParamAngleZ", tilt + clamp(target.lookX, -1, 1) * 6);
+
+    // 体: 待機中は小さく、発話中は少し大きく左右へ揺らす。
+    // 顔可動モデルにはこの変形が無いが、未使用パラメータへの書き込みは無害。
+    const bodySway = Math.sin(tiltPhase * 0.72) * (target.speaking ? 7 : 4)
+      + clamp(target.lookX, -1, 1) * 2;
+    core.setParameterValueById("ParamBodyAngleX", clamp(bodySway, -10, 10));
+
+    breathPhase += dt * 1.45;
+    core.setParameterValueById("ParamBreath", (Math.sin(breathPhase) + 1) * 0.5);
+
+    // 発話の切替を滑らかにし、左右の腕に少し時間差を付ける。
+    if (avatarMode === "arms") {
+      gestureStrength += ((target.speaking ? 1 : 0) - gestureStrength) * (1 - Math.exp(-dt * 3));
+      gesturePhase += dt * (0.9 + gestureStrength * 0.8);
+      const shoulderBase = 0.3 + gestureStrength * 0.12;
+      const shoulderRange = 0.035 + gestureStrength * 0.16;
+      const elbowRange = 0.06 + gestureStrength * 0.24;
+      core.setParameterValueById("ParamArmRAngle", clamp(shoulderBase + Math.sin(gesturePhase) * shoulderRange, 0, 1));
+      core.setParameterValueById("ParamArmLAngle", clamp(shoulderBase + Math.sin(gesturePhase + 1.1) * shoulderRange, 0, 1));
+      core.setParameterValueById("ParamElbowR", clamp(0.5 + Math.sin(gesturePhase * 1.15 + 0.7) * elbowRange, 0, 1));
+      core.setParameterValueById("ParamElbowL", clamp(0.5 + Math.sin(gesturePhase * 1.15 + 2.0) * elbowRange, 0, 1));
+    }
   }
 
   async function init(canvas) {
@@ -74,8 +103,8 @@ const DongurikoLive2D = (() => {
     model = await PIXI.live2d.Live2DModel.from(MODEL_URL, { autoInteract: false });
     app.stage.addChild(model);
 
-    // モーション適用後・まばたき適用前にパラメータを書き込む
-    model.internalModel.on("afterMotionUpdate", applyParams);
+    // SDKの自動揺れ適用後に書き込み、まばたきの目パラメータは保持する。
+    model.internalModel.on("beforeModelUpdate", applyParams);
 
     layout();
     // 初回はレイアウト確定前にsizeが0で取れることがあるので数フレーム追いかける
@@ -92,7 +121,7 @@ const DongurikoLive2D = (() => {
     init,
     // OBSでの位置調整・トラブル調査用
     debug() {
-      return { app, model, placement };
+      return { app, model, placement, avatarMode, modelUrl: MODEL_URL };
     },
     get ready() {
       return ready;
