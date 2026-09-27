@@ -1,7 +1,8 @@
 // TikTok LIVE のコメント・ギフト・フォローを、わんコメを通さず直接受け取る。
 // 非公式ライブラリ tiktok-live-connector を使う（TikTok 側の仕様変更で急に動かなくなることがある）。
 
-const GIFT_NOTE = "この視聴者がギフト（投げ銭）を贈ってくれました。贈ってくれたことに、うれしそうにお礼を言ってください。";
+import { describeGift, normalizeGiftConfig } from "./gifts.js";
+
 const FOLLOW_NOTE = "この視聴者がたった今フォローしてくれました。うれしそうにお礼を言ってください。";
 
 export function normalizeTikTokConfig(config) {
@@ -15,6 +16,7 @@ export function normalizeTikTokConfig(config) {
   tiktok.replyToGifts = tiktok.replyToGifts ?? true;
   tiktok.minGiftDiamonds = Math.max(0, Number(tiktok.minGiftDiamonds ?? 0));
   tiktok.replyToFollows = tiktok.replyToFollows ?? true;
+  normalizeGiftConfig(tiktok);
   return tiktok;
 }
 
@@ -94,8 +96,9 @@ function connectOnce(settings, library, seenIds, { onComment, onStatus }) {
     const count = Math.max(1, Number(data.repeatCount ?? 1));
     const diamonds = Number(gift.diamondCount ?? data.extendedGiftInfo?.diamond_count ?? 0) * count;
     if (diamonds < settings.minGiftDiamonds) return;
-    const name = gift.name || gift.giftName || data.extendedGiftInfo?.name || "ギフト";
-    emit(messageId(data), data.user, `ギフト「${name}」×${count}`, GIFT_NOTE);
+    const rawName = gift.name || gift.giftName || data.extendedGiftInfo?.name || "";
+    const { name, note } = describeGift(settings.gifts, rawName, count, diamonds);
+    emit(messageId(data), data.user, `ギフト「${name}」×${count}`, note);
   });
 
   connection.on(WebcastEvent.FOLLOW, (data) => {
