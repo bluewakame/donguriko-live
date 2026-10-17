@@ -44,6 +44,36 @@ start-test.bat
 node src/app.js
 ```
 
+### Drama 3 版（Fish Audio の声で読み上げる）
+
+irodori-TTS の代わりに、Fish Audio の音声合成 **Drama 3**（クラウドAPI）で読み上げる起動ファイルです。irodori-TTS を起動しないので、GPUはまるごと Ollama（Gemma）に使えます。そのかわり、読み上げた文字数に応じて Fish Audio の料金がかかります（100万文字あたり約15ドル）。
+
+| 起動ファイル | 中身 |
+| --- | --- |
+| `start-youtube-drama3.bat` | `start-live.bat` の Drama 3 版（わんコメ経由で YouTube などのコメントに返事） |
+| `start-tiktok-drama3.bat` | `start-tiktok.bat` の Drama 3 版（TikTok のコメントだけに返事） |
+
+設定は `config.json` の `tts.fish` に書きます（`tts.engine` は irodori のままでOK。bat が `TTS_ENGINE=fish-drama3` で切り替えます）。
+
+```json
+"tts": {
+  "fish": {
+    "apiKey": "fish.audio で発行したAPIキー",
+    "referenceId": "どんぐりこの声のボイスモデルID",
+    "instruction": "[明るく元気で、ちょっとドジでかわいい女の子の配信者らしく]"
+  }
+}
+```
+
+- **apiKey**：<https://fish.audio> の API Keys で発行します。`config.json` に書く代わりに環境変数 `FISH_API_KEY` に入れてもOKです。
+- **声の決め方**（どちらか）：
+  - `referenceId`：fish.audio でどんぐりこの声見本（10〜30秒）からボイスモデルを作り、そのIDを入れます。おすすめ。
+  - `refWav` ＋ `refText`：参照音声のパスと、その音声で話している文をそのまま入れます。毎回音声も送るので、少し遅くなります。
+  - どちらも空なら Drama 3 の標準の声になります。
+- **instruction**：角かっこの演技指示です。毎回の読み上げの先頭に付き、Drama 3 がその話し方で読みます。空にすると付けません。
+- `speed`（0.5〜2.0）、`latency`（`low` / `normal` / `balanced`）、`temperature`、`topP` も変えられます。
+- 作った音声は irodori 版とは別にキャッシュされます（`runtime/tts-cache`）。
+
 ## OBS URL
 
 `start-live.bat` は 8790〜8899 の中から空いているポートを探して起動し、実際のURLを画面に表示します（`OBS URL:` / `OBS vertical URL:` の行）。普段は 8790 になります。

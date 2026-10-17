@@ -198,7 +198,12 @@ async function loadConfig() {
   const raw = await readFile(CONFIG_PATH, "utf8");
   const config = JSON.parse(raw);
   const example = JSON.parse(await readFile(CONFIG_EXAMPLE_PATH, "utf8"));
-  return deepMerge(example, config);
+  const merged = deepMerge(example, config);
+  // 起動用 bat から読み上げエンジンだけ切り替えられるようにする（Drama 3 版など）。
+  if (process.env.TTS_ENGINE) {
+    merged.tts = { ...merged.tts, engine: process.env.TTS_ENGINE };
+  }
+  return merged;
 }
 
 function deepMerge(base, override) {
@@ -2704,6 +2709,9 @@ async function synthesizeVoice(config, text, outPath = join(RUNTIME_DIR, "last.w
   if (engine === "irodori") {
     return synthesizeIrodoriVoice(tts, speechText, outPath);
   }
+  if (["fish-drama3", "drama3", "drama-3", "fish-audio"].includes(engine)) {
+    return synthesizeFishAudioVoice(tts, speechText, outPath);
+  }
   return synthesizeAivisVoice(tts, speechText, outPath);
 }
 
@@ -2930,6 +2938,105 @@ async function synthesizeIrodoriVoice(tts, text, wavPath) {
 
   await writeResponseBodyToFile(res, wavPath);
   return wavPath;
+}
+
+// Fish Audio の Drama 3（クラウドAPI）で読み上げる。
+// 声は fish.audio で作ったボイスモデルの referenceId か、参照音声 refWav（＋その文字起こし refText）で決める。
+async function synthesizeFishAudioVoice(tts, text, wavPath) {
+  const fish = tts.fish ?? {};
+  const apiKey = process.env.FISH_API_KEY || fish.apiKey || "";
+  if (!apiKey) {
+    throw new Error("Fish Audio の APIキーがありません。環境変数 FISH_API_KEY か config.json の tts.fish.apiKey に入れてください。");
+  }
+  const endpoint = String(fish.endpoint ?? "https://api.fish.audio").replace(/\/+$/g, "");
+  const timeoutMs = fish.timeoutMs ?? tts.timeoutMs ?? 60000;
+  // 角かっこの演技指示（例: [明るく元気に]）を文頭に付けると、Drama 3 がその話し方で読む。
+  const instruction = String(fish.instruction ?? "").trim();
+  const body = {
+    text: instruction ? `${instruction} ${text}` : text,
+    format: "wav",
+    latency: fish.latency ?? "normal",
+    temperature: fish.temperature ?? 0.7,
+    top_p: fish.topP ?? 0.7,
+    normalize: fish.normalize ?? true,
+    prosody: { speed: fish.speed ?? 1, volume: fish.volume ?? 0 }
+  };
+  if (fish.language) body.language = fish.language;
+  if (fish.sampleRate) body.sample_rate = fish.sampleRate;
+
+  const headers = {
+    Authorization: `Bearer ${apiKey}`,
+    model: fish.model ?? "drama-3"
+  };
+  let payload;
+  if (fish.referenceId) {
+    body.reference_id = fish.referenceId;
+  } else if (fish.refWav) {
+    if (!existsSync(fish.refWav)) throw new Error(`Fish Audio reference audio was not found: ${fish.refWav}`);
+    if (!fish.refText) throw new Error("tts.fish.refWav を使うときは、その音声の文字起こしを tts.fish.refText に入れてください。");
+    // 参照音声をそのまま送る方法は MessagePack でしか受け付けない。
+    body.references = [{ audio: await readFile(fish.refWav), text: fish.refText }];
+    payload = encodeMsgpack(body);
+    headers["Content-Type"] = "application/msgpack";
+  }
+  if (!payload) {
+    payload = JSON.stringify(body);
+    headers["Content-Type"] = "application/json";
+  }
+
+  const res = await fetchWithTimeout(`${endpoint}/v1/tts`, { method: "POST", headers, body: payload }, timeoutMs);
+  if (!res.ok) throw new Error(`Fish Audio TTS HTTP ${res.status}: ${await safeErrorText(res)}`);
+  await writeResponseBodyToFile(res, wavPath);
+  return wavPath;
+}
+
+// Fish Audio へ参照音声を送るためだけの、最小限の MessagePack 書き出し。
+function encodeMsgpack(value) {
+  const chunks = [];
+  const push = (...bytes) => chunks.push(Buffer.from(bytes));
+  const withLength = (len, small, codes) => {
+    if (small !== undefined && len < 16) return push(small | len);
+    if (codes[0] !== undefined && len < 0x100) return push(codes[0], len);
+    if (len < 0x10000) return push(codes[1], len >> 8, len & 0xff);
+    const b = Buffer.alloc(5);
+    b[0] = codes[2];
+    b.writeUInt32BE(len, 1);
+    chunks.push(b);
+  };
+  const write = (v) => {
+    if (v === null || v === undefined) return push(0xc0);
+    if (v === true) return push(0xc3);
+    if (v === false) return push(0xc2);
+    if (Buffer.isBuffer(v)) {
+      withLength(v.length, undefined, [0xc4, 0xc5, 0xc6]);
+      return chunks.push(v);
+    }
+    if (typeof v === "number") {
+      if (Number.isInteger(v) && v >= 0 && v < 128) return push(v);
+      const b = Buffer.alloc(9);
+      b[0] = 0xcb;
+      b.writeDoubleBE(v, 1);
+      return chunks.push(b);
+    }
+    if (typeof v === "string") {
+      const s = Buffer.from(v, "utf8");
+      if (s.length < 32) push(0xa0 | s.length);
+      else withLength(s.length, undefined, [0xd9, 0xda, 0xdb]);
+      return chunks.push(s);
+    }
+    if (Array.isArray(v)) {
+      withLength(v.length, 0x90, [undefined, 0xdc, 0xdd]);
+      return v.forEach(write);
+    }
+    const entries = Object.entries(v).filter(([, item]) => item !== undefined);
+    withLength(entries.length, 0x80, [undefined, 0xde, 0xdf]);
+    for (const [key, item] of entries) {
+      write(key);
+      write(item);
+    }
+  };
+  write(value);
+  return Buffer.concat(chunks);
 }
 
 async function synthesizeAivisVoice(tts, text, wavPath) {

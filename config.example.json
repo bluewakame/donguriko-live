@@ -123,6 +123,20 @@
       "cfgMinT": 0.5,
       "cfgMaxT": 1,
       "contextKvCache": true
+    },
+    "fish": {
+      "apiKey": "",
+      "model": "drama-3",
+      "referenceId": "",
+      "refWav": "",
+      "refText": "",
+      "instruction": "[明るく元気で、ちょっとドジでかわいい女の子の配信者らしく]",
+      "language": "ja",
+      "latency": "normal",
+      "speed": 1,
+      "temperature": 0.7,
+      "topP": 0.7,
+      "timeoutMs": 60000
     }
   },
   "bot": {
