@@ -1,4 +1,4 @@
-const stage=document.getElementById('stage'),particles=document.getElementById('particles'),video=document.getElementById('avatarVideo'),lip=document.getElementById('lipLayer');
+const stage=document.getElementById('stage'),particles=document.getElementById('particles'),video=document.getElementById('avatarVideo'),reactionVideo=document.getElementById('reactionVideo'),lip=document.getElementById('lipLayer');
 const gifts={
   idle:['♡','遊びに来てくれてありがとう','ゆったり配信中','♥',0,'#ffd3d8'],
   rose:['🌹','バラ、ありがとう！','バラにお礼中','🌹',26,'#ff8aa9'],
@@ -35,8 +35,15 @@ function react(kind='idle',from=''){
     p.style.setProperty('--c',color);
     particles.append(p);
   }
-  const file=kind==='idle'?'avatar-idle.mp4?v=breath2':'avatar-loop.mp4?v=breath2';
-  if(video.dataset.file!==file){video.dataset.file=file;video.src=file;video.load();video.play().catch(()=>{})}
+  // 待機映像は止めず、リアクション映像だけを重ねて滑らかに切り替える。
+  if(kind==='idle'){
+    stage.classList.remove('reacting');
+    setTimeout(()=>{if(!stage.classList.contains('reacting'))reactionVideo.pause()},550);
+  }else{
+    reactionVideo.currentTime=0;
+    reactionVideo.play().catch(()=>{});
+    stage.classList.add('reacting');
+  }
   clearTimeout(timer);
   if(kind!=='idle')timer=setTimeout(()=>react('idle'),7000);
 }

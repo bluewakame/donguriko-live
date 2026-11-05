@@ -33,3 +33,11 @@
 @keyframes cardPop{0%{transform:scale(.88)}100%{transform:scale(1)}}
 @keyframes giftBurst{0%{opacity:0;transform:translate(0,0) scale(.3)}12%{opacity:1}100%{opacity:0;transform:translate(var(--dx),var(--dy)) rotate(180deg) scale(1.15)}}
 @media(prefers-reduced-motion:reduce){.stage:not([data-reaction=idle]) .gift-aura,.stage:not([data-reaction=idle]) .gift-rays,.stage:not([data-reaction=idle]) .gift-flash,.stage:not([data-reaction=idle]) .message{animation:none}}
+
+/* 2本の映像を同時に保持し、ギフト時の再読み込みによる停止をなくす。 */
+.reaction-video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;z-index:1;pointer-events:none;transition:opacity .48s ease-in-out;will-change:opacity}
+.stage.reacting .reaction-video{opacity:1;animation:reactionMotion 7s ease-in-out both}
+.avatar-video{animation:idlePresence 8.4s ease-in-out infinite;will-change:transform}
+@keyframes reactionMotion{0%,100%{transform:scale(1.012) translate(0,0)}35%{transform:scale(1.034) translate(-3px,-5px)}70%{transform:scale(1.023) translate(3px,-2px)}}
+@keyframes idlePresence{0%,100%{transform:scale(1.012) translate(0,0)}25%{transform:scale(1.018) translate(-2px,-2px)}50%{transform:scale(1.026) translate(1px,-4px)}75%{transform:scale(1.017) translate(2px,-1px)}}
+@media(prefers-reduced-motion:reduce){.avatar-video{animation:none}.reaction-video{transition:none;animation:none}}
