@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { createSystemOne } from "./system-one.js";
-import { relevantMemoryFacts } from "./memory-relevance.js";
+import { relevantMemoryFacts, directMemoryReply } from "./memory-relevance.js";
 import { findUnsafeReason, isDistress, DISTRESS_REPLY, SAFE_REPLY, SAFETY_PROMPT } from "./safety.js";
 import { normalizeTikTokConfig, runTikTokLoop } from "./tiktok.js";
 import { isEnglishComment, joinSentences, parseLanguageRequest, toJapaneseReading } from "./language.js";
@@ -1555,8 +1555,10 @@ async function handleComment(config, comment) {
   let reply = "";
   try {
     const giftFast = comment.service === "tiktok" && !language && !languageRequest ? fastGiftReply(filtered.text) : "";
+    await refreshMarkdownMemoryIfChanged(config);
+    const memoryDirect = !mustThink ? directMemoryReply(longTermMemoryText, filtered.text) : "";
     const canned = mustThink ? undefined : makeCannedReply(filtered.text);
-    const toolReply = canned || mustThink ? undefined : await makeToolReply(config, filtered.text);
+    const toolReply = canned || mustThink || memoryDirect ? undefined : await makeToolReply(config, filtered.text);
     if (giftFast) {
       route = "gift-fast";
       reply = giftFast;
@@ -1577,6 +1579,10 @@ async function handleComment(config, comment) {
         reply = joinSentences(reply, nameLine);
         await playSegment(config, nameWav, reply, timing);
       }
+    } else if (memoryDirect) {
+      route = "memory-direct";
+      reply = memoryDirect;
+      await speakReply(config, reply, { cache: true, timing });
     } else if (canned || toolReply) {
       route = canned ? "canned" : "tool";
       // 定型文は trimReply を通すと「どんぐりこだよ。」が自己紹介除去で消えてしまうのでそのまま使う。

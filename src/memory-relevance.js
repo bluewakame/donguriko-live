@@ -28,6 +28,7 @@ export function relevantMemoryFacts(memoryText, question, limit = 3) {
       const fact = normalize(line);
       let score = 0;
       for (const gram of queryGrams) if (fact.includes(gram)) score += 1;
+      if (fact.includes("都市伝説") && !query.includes("都市伝説")) score -= 2;
       return { line, score };
     })
     .filter(({ score }) => score > 0)
@@ -36,4 +37,18 @@ export function relevantMemoryFacts(memoryText, question, limit = 3) {
   return ranked.filter(({ score }) => score === ranked[0].score)
     .slice(0, limit)
     .map(({ line }) => line);
+}
+
+// キャラクターの明示的な個人設定は、生成モデルに任せず記憶の記述から答える。
+export function directMemoryReply(memoryText, question) {
+  const query = normalize(question);
+  if (!/(youtube|ユーチューブ)/.test(query)) return "";
+  const facts = relevantMemoryFacts(memoryText, question);
+  if (facts.length !== 1 || !/(youtube|ユーチューブ)/.test(normalize(facts[0]))) return "";
+  const match = facts[0].replace(/^・/, "").match(/^(.{1,40}?)は(.{1,100})$/);
+  if (!match) return "";
+  const subject = match[1].trim();
+  const answer = match[2].replace(/[。！!]+$/, "").trim();
+  if (!subject || !answer) return "";
+  return `${subject}は${answer}だよ。`;
 }
