@@ -47,6 +47,16 @@ function react(kind='idle',from=''){
   clearTimeout(timer);
   if(kind!=='idle')timer=setTimeout(()=>react('idle'),7000);
 }
+// OBS のブラウザソースで一時停止・再描画されても待機映像を復帰させる。
+function keepIdlePlaying(){
+  if(video.paused||video.ended)video.play().catch(()=>{});
+}
+video.addEventListener('pause',()=>setTimeout(keepIdlePlaying,250));
+video.addEventListener('ended',keepIdlePlaying);
+video.addEventListener('stalled',keepIdlePlaying);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)keepIdlePlaying()});
+setInterval(keepIdlePlaying,2000);
+keepIdlePlaying();
 document.querySelectorAll('[data-gift]').forEach(b=>b.onclick=()=>react(b.dataset.gift));
 function giftKind(value){
   const s=String(value).normalize('NFKC').toLowerCase();

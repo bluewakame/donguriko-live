@@ -41,3 +41,8 @@
 @keyframes reactionMotion{0%,100%{transform:scale(1.012) translate(0,0)}35%{transform:scale(1.034) translate(-3px,-5px)}70%{transform:scale(1.023) translate(3px,-2px)}}
 @keyframes idlePresence{0%,100%{transform:scale(1.012) translate(0,0)}25%{transform:scale(1.018) translate(-2px,-2px)}50%{transform:scale(1.026) translate(1px,-4px)}75%{transform:scale(1.017) translate(2px,-1px)}}
 @media(prefers-reduced-motion:reduce){.avatar-video{animation:none}.reaction-video{transition:none;animation:none}}
+
+/* 動画と口元を同じ軌道で動かし、約8秒の素材に別周期の呼吸を重ねる。 */
+.avatar-video,.lip-layer{animation:idlePresenceLong 10.6s ease-in-out infinite;transform-origin:50% 65%;will-change:transform}
+@keyframes idlePresenceLong{0%,100%{transform:scale(1.018) translate(0,0)}20%{transform:scale(1.032) translate(-3px,-3px)}48%{transform:scale(1.045) translate(1px,-7px)}72%{transform:scale(1.028) translate(4px,-2px)}88%{transform:scale(1.022) translate(2px,1px)}}
+@media(prefers-reduced-motion:reduce){.avatar-video,.lip-layer{animation:none}}
