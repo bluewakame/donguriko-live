@@ -1772,9 +1772,10 @@ async function playSegment(config, wavPath, displayText, timing, { onStart } = {
       isSpeaking: true,
       audioToken: `${Date.now()}-${++audioTokenCounter}`,
       audioMs: lipSync.durationMs,
-      // ブラウザで再生するときは再生中の音量から口を動かすので包絡線は送らない
-      mouthEnvelope: useBrowserAudio ? [] : lipSync.envelope,
-      mouthFrameMs: useBrowserAudio ? 0 : lipSync.frameMs,
+      // ブラウザ音声がブロックされても口が止まらないよう、包絡線は常に送る。
+      browserAudio: useBrowserAudio,
+      mouthEnvelope: lipSync.envelope,
+      mouthFrameMs: lipSync.frameMs,
       lipSyncOffsetMs: useBrowserAudio ? 0 : config.audio.lipSyncOffsetMs
     });
   };
