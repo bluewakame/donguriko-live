@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { createSystemOne } from "./system-one.js";
+import { relevantMemoryFacts } from "./memory-relevance.js";
 import { findUnsafeReason, isDistress, DISTRESS_REPLY, SAFE_REPLY, SAFETY_PROMPT } from "./safety.js";
 import { normalizeTikTokConfig, runTikTokLoop } from "./tiktok.js";
 import { isEnglishComment, joinSentences, parseLanguageRequest, toJapaneseReading } from "./language.js";
@@ -2395,7 +2396,7 @@ function hasContextReference(text) {
 function formatLongTermMemory() {
   if (!longTermMemoryText) return "";
   return [
-    "Dongurikoの長期記憶メモです。性格、好み、配信方針の参考として必要な部分だけ自然に反映してください。",
+    "Dongurikoの長期記憶メモです。自分の年齢・好み・設定について明記された内容は、質問された時の答えとして優先してください。",
     "メモの文章をそのままコピーせず、今回のコメントに関係する内容だけを使ってください。",
     "同じ言葉、同じ語尾、同じ口癖を繰り返さないでください。",
     "ただし、メモを読んだことやファイル名は返答に出さないでください。",
@@ -2464,6 +2465,10 @@ const MIXED_ENGLISH_PROMPT = "コメントに英単語が混ざっていたら�
 async function buildReplyPrompts(config, author, text, { service = "", eventNote = "", language = null, dialect = false } = {}) {
   await refreshMarkdownMemoryIfChanged(config);
   const longTermMemoryPrompt = formatLongTermMemory();
+  const relevantFacts = relevantMemoryFacts(longTermMemoryText, text);
+  const relevantFactPrompt = relevantFacts.length
+    ? `今回の質問に関係するどんぐりこの記憶:\n${relevantFacts.join("\n")}\n自分の年齢・好み・設定を直接聞かれたら、このキャラクター設定の答えを一文目で伝えてください。一般論や聞き返しで避けないでください。\n`
+    : "";
   const memoryPrompt = formatShortTermMemory(config, author, text);
   const nickname = sanitizeNickname(author);
   const platform = platformLabel(service);
@@ -2476,8 +2481,8 @@ async function buildReplyPrompts(config, author, text, { service = "", eventNote
   // 答えの欄にも言語を書いておくと、小さいモデルでも指定の言語で書き始めやすい。
   const answerLabel = language ? `返答（${language}）` : "返答";
   return {
-    prompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n今回のコメントだけに自然に返してください。直前の話題は、コメントが明確に続きだと分かる時だけ使ってください。絵文字だけ、相づちだけ、定型文だけで終わらず、コメント内容に具体的に反応してください。\n\n${memoryPrompt}${currentDateTimeLine(config)}${nicknameLine}${eventLine}コメント: ${text}\n${languageLine}\n${answerLabel}:`,
-    retryPrompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n次のコメントに${retryLength}具体的に返してください。定型文だけで終わらず、コメント内容に触れてください。\n${currentDateTimeLine(config)}コメント: ${text}\n${languageLine}\n${answerLabel}:`
+    prompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n今回のコメントだけに自然に返してください。直前の話題は、コメントが明確に続きだと分かる時だけ使ってください。絵文字だけ、相づちだけ、定型文だけで終わらず、コメント内容に具体的に反応してください。\n\n${memoryPrompt}${currentDateTimeLine(config)}${nicknameLine}${eventLine}コメント: ${text}\n${relevantFactPrompt}\n${languageLine}\n${answerLabel}:`,
+    retryPrompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n次のコメントに${retryLength}具体的に返してください。定型文だけで終わらず、コメント内容に触れてください。\n${currentDateTimeLine(config)}コメント: ${text}\n${relevantFactPrompt}${languageLine}\n${answerLabel}:`
   };
 }
 
