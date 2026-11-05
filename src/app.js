@@ -1560,12 +1560,17 @@ async function handleComment(config, comment) {
       route = "gift-fast";
       reply = giftFast;
       const nameLine = `${comment.author}さん、ありがとう！`;
-      // 名前の音声は、キャッシュ済みのお礼を流している間に合成する。
+      // 初回でもお礼音声を先に生成し、その間に名前の音声も用意する。
+      const giftAudio = synthesizeForSpeech(config, reply, { cache: true }).catch((error) => {
+        publish({ lastError: error.message });
+        return "";
+      });
       const nameAudio = synthesizeForSpeech(config, nameLine, { cache: true }).catch((error) => {
         publish({ lastError: error.message });
         return "";
       });
-      await speakReply(config, reply, { cache: true, timing });
+      const giftWav = await giftAudio;
+      if (giftWav) await playSegment(config, giftWav, reply, timing);
       const nameWav = await nameAudio;
       if (nameWav) {
         reply = joinSentences(reply, nameLine);
