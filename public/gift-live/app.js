@@ -5,6 +5,7 @@ function react(kind='idle',from=''){const [icon,title,mode,symbol,count]=gifts[k
 document.querySelectorAll('[data-gift]').forEach(b=>b.onclick=()=>react(b.dataset.gift));
 function giftKind(s){s=String(s).toLowerCase();if(/universe|galaxy|rocket|ユニバース|ギャラクシー/.test(s))return'universe';if(/firework|花火/.test(s))return'fireworks';if(/confetti|紙吹雪/.test(s))return'confetti';if(/rose|rosa|バラ/.test(s))return'rose';return'heart'}
 async function playSpeech(token){try{ctx??=new (window.AudioContext||window.webkitAudioContext)();await ctx.resume();let response=await fetch(`/audio/last.wav?t=${encodeURIComponent(token)}`,{cache:'no-store'});if(!response.ok)return;let buffer=await ctx.decodeAudioData(await response.arrayBuffer());if(source){source.onended=null;try{source.stop()}catch{}}source=ctx.createBufferSource();source.buffer=buffer;analyser=ctx.createAnalyser();analyser.fftSize=1024;samples=new Uint8Array(analyser.fftSize);source.connect(analyser);analyser.connect(ctx.destination);source.onended=()=>{analyser=null;source=null};source.start()}catch(e){console.warn(e)}}
+document.addEventListener("pointerdown",()=>ctx?.resume().catch(()=>{}));
 const clamp=(value,min,max)=>Math.min(max,Math.max(min,value));
 let smoothMouth=0,lastMouthFrame=0;
 function mouth(now){
@@ -37,3 +38,4 @@ function draw(now){
 requestAnimationFrame(draw);
 function onState(s){let t=String(s.commentText||''),signature=`${s.commentAuthor}|${t}`;if(s.commentService==='TikTok'&&t.startsWith('ギフト「')&&signature!==lastGift){lastGift=signature;react(giftKind(t),s.commentAuthor||'視聴者')}speaking=!!s.isSpeaking;if(s.replyText&&speaking)document.getElementById('giftLine').textContent=s.replyText;if(s.audioToken&&s.audioToken!==lastToken){lastToken=s.audioToken;envelope=Array.isArray(s.mouthEnvelope)?s.mouthEnvelope:[];envelopeFrame=s.mouthFrameMs||40;envelopeStart=performance.now()+(s.lipSyncOffsetMs||0);if(s.browserAudio)playSpeech(s.audioToken)}}
 if(new URLSearchParams(location.search).get('obs')==='1')document.body.classList.add('obs');try{let stream=new EventSource('/events');stream.onmessage=e=>onState(JSON.parse(e.data))}catch{}window.GiftLive={react,giftKind};
+
