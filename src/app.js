@@ -1493,6 +1493,22 @@ async function resolveLiveChatId(config) {
   throw new Error("有効な自分のライブ配信が見つかりません。配信を開始するか broadcastId を設定してください。");
 }
 
+const FAST_GIFT_REPLIES = {
+  rose: "バラありがとう！とってもうれしいよ。",
+  heart: "ハートありがとう！私からもハートを送るね。",
+  celebration: "すごいギフトありがとう！一緒に盛り上がろう。",
+  universe: "えっ、ユニバース！？本当にありがとう！",
+  other: "ギフトありがとう！すっごくうれしいよ。"
+};
+
+function fastGiftReply(text) {
+  if (!String(text).startsWith("ギフト「")) return "";
+  if (/ユニバース|ギャラクシー|ロケット|プライベートジェット|インターステラー/.test(text)) return FAST_GIFT_REPLIES.universe;
+  if (/花火|紙吹雪|王冠|マネーガン/.test(text)) return FAST_GIFT_REPLIES.celebration;
+  if (/バラ|ローザ/.test(text)) return FAST_GIFT_REPLIES.rose;
+  if (/ハート|ラブユー/.test(text)) return FAST_GIFT_REPLIES.heart;
+  return FAST_GIFT_REPLIES.other;
+}
 async function handleComment(config, comment) {
   const filtered = filterComment(config, comment.text);
   if (!filtered.ok) {
@@ -1537,9 +1553,25 @@ async function handleComment(config, comment) {
   let route = mustThink ? "system-two" : decision.route;
   let reply = "";
   try {
+    const giftFast = comment.service === "tiktok" && !language && !languageRequest ? fastGiftReply(filtered.text) : "";
     const canned = mustThink ? undefined : makeCannedReply(filtered.text);
     const toolReply = canned || mustThink ? undefined : await makeToolReply(config, filtered.text);
-    if (canned || toolReply) {
+    if (giftFast) {
+      route = "gift-fast";
+      reply = giftFast;
+      const nameLine = `${comment.author}さん、ありがとう！`;
+      // 名前の音声は、キャッシュ済みのお礼を流している間に合成する。
+      const nameAudio = synthesizeForSpeech(config, nameLine, { cache: true }).catch((error) => {
+        publish({ lastError: error.message });
+        return "";
+      });
+      await speakReply(config, reply, { cache: true, timing });
+      const nameWav = await nameAudio;
+      if (nameWav) {
+        reply = joinSentences(reply, nameLine);
+        await playSegment(config, nameWav, reply, timing);
+      }
+    } else if (canned || toolReply) {
       route = canned ? "canned" : "tool";
       // 定型文は trimReply を通すと「どんぐりこだよ。」が自己紹介除去で消えてしまうのでそのまま使う。
       reply = canned ?? trimReply(toolReply, config.bot.maxReplyChars);
@@ -1817,6 +1849,7 @@ async function warmUpOllama(config) {
 // 即答・相づち・定型文の音声を先に合成してディスクに保存しておく。コメント処理中は合成しない。
 async function prewarmTtsCache(config, { quiet = true } = {}) {
   const phrases = [...new Set([
+    ...Object.values(FAST_GIFT_REPLIES),
     ...systemOne.allPhrases(),
     NAME_REPLY,
     MODEL_REPLY,
@@ -1861,6 +1894,7 @@ function ttsCachePath(config, text) {
 }
 
 // キャッシュがあれば合成を省く。cache=true の時だけ新しく作った音声をキャッシュへ保存する。
+const pendingTtsCache = new Map();
 async function synthesizeForSpeech(config, text, { cache = false } = {}) {
   const cachePath = ttsCachePath(config, text);
   if (existsSync(cachePath)) return cachePath;
@@ -1868,10 +1902,15 @@ async function synthesizeForSpeech(config, text, { cache = false } = {}) {
     const segmentPath = join(TTS_SEGMENT_DIR, `segment-${ttsSegmentCounter++ % TTS_SEGMENT_SLOTS}.wav`);
     return synthesizeVoice(config, text, segmentPath);
   }
-  const tmpPath = `${cachePath}.${process.pid}.tmp`;
-  await synthesizeVoice(config, text, tmpPath);
-  await rename(tmpPath, cachePath);
-  return cachePath;
+  if (pendingTtsCache.has(cachePath)) return pendingTtsCache.get(cachePath);
+  const work = (async () => {
+    const tmpPath = `${cachePath}.${process.pid}.tmp`;
+    await synthesizeVoice(config, text, tmpPath);
+    await rename(tmpPath, cachePath);
+    return cachePath;
+  })();
+  pendingTtsCache.set(cachePath, work);
+  try { return await work; } finally { pendingTtsCache.delete(cachePath); }
 }
 
 function makeCannedReply(text) {
@@ -3211,4 +3250,3 @@ main().catch((error) => {
   publish({ status: "fatal", lastError: error.message, replyText: "起動に失敗しちゃった" });
   process.exitCode = 1;
 });
-
