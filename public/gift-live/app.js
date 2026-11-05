@@ -1,9 +1,58 @@
 const stage=document.getElementById('stage'),particles=document.getElementById('particles'),video=document.getElementById('avatarVideo'),lip=document.getElementById('lipLayer');
-const gifts={idle:['♡','遊びに来てくれてありがとう','ゆったり配信中','♥',0],rose:['🌹','バラ、ありがとう！','バラにお礼中','🌹',20],heart:['♡','ハート、受け取ったよ','ハートをお返し中','♥',28],confetti:['✦','お祝いありがとう！','お祝い中','✦',50],fireworks:['✺','花火、すごい！','花火にリアクション中','✺',60],universe:['✧','ユニバース！？ありがとう！','スペシャルギフトに感謝中','✦',80]};
+const gifts={
+  idle:['♡','遊びに来てくれてありがとう','ゆったり配信中','♥',0,'#ffd3d8'],
+  rose:['🌹','バラ、ありがとう！','バラにお礼中','🌹',26,'#ff8aa9'],
+  heart:['💗','ハート、受け取ったよ','ハートをお返し中','♥',36,'#ff79b2'],
+  confetti:['🎉','お祝いありがとう！','お祝い中','✦',72,'#ffe095'],
+  fireworks:['🎆','花火、すごい！','花火にリアクション中','✺',90,'#ffbb6f'],
+  crown:['👑','王冠、ありがとう！','キラキラお祝い中','✦',84,'#ffe09a'],
+  money:['💸','マネーガン！？ありがとう！','感謝が止まらない','💎',90,'#9dffcb'],
+  disco:['🪩','一緒に踊ろう！','ダンス気分','✦',78,'#8ce9ff'],
+  rocket:['🚀','ロケット発射！ありがとう！','宇宙へ出発中','✧',100,'#b7b5ff'],
+  universe:['🌌','ユニバース！？ありがとう！','スペシャルギフトに感謝中','✦',120,'#d9bdff']
+};
 let timer,lastGift='',lastToken='',seenState=false,ctx,source,analyser,samples,envelope=[],envelopeStart=0,envelopeFrame=40,speaking=false;
-function react(kind='idle',from=''){const [icon,title,mode,symbol,count]=gifts[kind]||gifts.heart;stage.dataset.reaction=kind;document.getElementById('giftIcon').textContent=icon;document.getElementById('giftTitle').textContent=title;document.getElementById('giftFrom').textContent=from?`${from} さんからのギフト`:'WELCOME GIFT';document.getElementById('modeLabel').textContent=mode;particles.replaceChildren();for(let i=0;i<count;i++){let p=document.createElement('span');p.className='particle';p.textContent=symbol;p.style.setProperty('--x',`${Math.random()*100}%`);p.style.setProperty('--s',`${14+Math.random()*22}px`);p.style.setProperty('--d',`${2.4+Math.random()*2.7}s`);p.style.setProperty('--delay',`${Math.random()*1.5}s`);p.style.setProperty('--c',kind==='universe'?'#d9bdff':'#ffd3d8');particles.append(p)}let file=kind==='idle'?'avatar-idle.mp4?v=breath2':'avatar-loop.mp4?v=breath2';if(video.dataset.file!==file){video.dataset.file=file;video.src=file;video.load();video.play().catch(()=>{})}clearTimeout(timer);if(kind!=='idle')timer=setTimeout(()=>react('idle'),6500)}
+function react(kind='idle',from=''){
+  const [icon,title,mode,symbol,count,color]=gifts[kind]||gifts.heart;
+  stage.dataset.reaction='idle'; void stage.offsetWidth; stage.dataset.reaction=kind;
+  document.getElementById('giftIcon').textContent=icon;
+  document.getElementById('giftTitle').textContent=title;
+  document.getElementById('giftFrom').textContent=from?`${from} さんからのギフト`:'WELCOME GIFT';
+  document.getElementById('modeLabel').textContent=mode;
+  particles.replaceChildren();
+  const burst=['fireworks','crown','rocket','universe'].includes(kind);
+  for(let i=0;i<count;i++){
+    const p=document.createElement('span'),angle=Math.random()*Math.PI*2,radius=burst?120+Math.random()*380:0;
+    p.className=`particle ${burst?'burst':'float'}`;
+    p.textContent=symbol;
+    p.style.setProperty('--x',`${Math.random()*100}%`);
+    p.style.setProperty('--y',`${Math.random()*90}%`);
+    p.style.setProperty('--dx',`${Math.cos(angle)*radius}px`);
+    p.style.setProperty('--dy',`${Math.sin(angle)*radius}px`);
+    p.style.setProperty('--s',`${12+Math.random()*20}px`);
+    p.style.setProperty('--d',`${2.4+Math.random()*2.2}s`);
+    p.style.setProperty('--delay',`${Math.random()*(burst?.65:1.2)}s`);
+    p.style.setProperty('--c',color);
+    particles.append(p);
+  }
+  const file=kind==='idle'?'avatar-idle.mp4?v=breath2':'avatar-loop.mp4?v=breath2';
+  if(video.dataset.file!==file){video.dataset.file=file;video.src=file;video.load();video.play().catch(()=>{})}
+  clearTimeout(timer);
+  if(kind!=='idle')timer=setTimeout(()=>react('idle'),7000);
+}
 document.querySelectorAll('[data-gift]').forEach(b=>b.onclick=()=>react(b.dataset.gift));
-function giftKind(s){s=String(s).toLowerCase();if(/universe|galaxy|rocket|ユニバース|ギャラクシー/.test(s))return'universe';if(/firework|花火/.test(s))return'fireworks';if(/confetti|紙吹雪/.test(s))return'confetti';if(/rose|rosa|バラ/.test(s))return'rose';return'heart'}
+function giftKind(value){
+  const s=String(value).normalize('NFKC').toLowerCase();
+  if(/universe|galaxy|ユニバース|ギャラクシー|インターステラー/.test(s))return'universe';
+  if(/rocket|ロケット|ジェット/.test(s))return'rocket';
+  if(/disco|mirror ball|ミラーボール|ディスコ/.test(s))return'disco';
+  if(/money|マネー|札束/.test(s))return'money';
+  if(/crown|王冠/.test(s))return'crown';
+  if(/firework|花火/.test(s))return'fireworks';
+  if(/confetti|紙吹雪/.test(s))return'confetti';
+  if(/rose|rosa|バラ/.test(s))return'rose';
+  return'heart';
+}
 async function playSpeech(token){try{ctx??=new (window.AudioContext||window.webkitAudioContext)();await ctx.resume();let response=await fetch(`/audio/last.wav?t=${encodeURIComponent(token)}`,{cache:'no-store'});if(!response.ok)return;let buffer=await ctx.decodeAudioData(await response.arrayBuffer());if(source){source.onended=null;try{source.stop()}catch{}}source=ctx.createBufferSource();source.buffer=buffer;analyser=ctx.createAnalyser();analyser.fftSize=1024;samples=new Uint8Array(analyser.fftSize);source.connect(analyser);analyser.connect(ctx.destination);source.onended=()=>{analyser=null;source=null};source.start()}catch(e){console.warn(e)}}
 document.addEventListener("pointerdown",()=>ctx?.resume().catch(()=>{}));
 const clamp=(value,min,max)=>Math.min(max,Math.max(min,value));

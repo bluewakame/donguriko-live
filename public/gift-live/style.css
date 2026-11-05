@@ -5,3 +5,31 @@
 
 .avatar-video{animation:breathPresence 4s ease-in-out infinite;transform-origin:50% 65%}
 @keyframes breathPresence{0%,100%{transform:scale(1)}50%{transform:scale(1.012) translateY(-2px)}}
+
+/* ギフト別の全画面エフェクト。人物の顔とテキストを覆い続けない短い演出にする。 */
+.gift-aura,.gift-rays,.gift-flash{position:absolute;inset:0;z-index:2;pointer-events:none;opacity:0}
+.gift-aura{background:radial-gradient(circle at 52% 44%,transparent 17%,var(--gift-glow,#ff9eb8aa) 65%,transparent 95%);mix-blend-mode:screen}
+.gift-rays{background:repeating-conic-gradient(from 0deg at 50% 48%,transparent 0deg 13deg,#ffffff35 15deg 17deg,transparent 20deg 30deg);mix-blend-mode:screen}
+.gift-flash{background:#fff;mix-blend-mode:screen}
+.stage[data-reaction=rose]{--gift-glow:#ff74a677}.stage[data-reaction=heart]{--gift-glow:#ff78c488}
+.stage[data-reaction=confetti]{--gift-glow:#ffd86399}.stage[data-reaction=fireworks]{--gift-glow:#ff9c6fbb}
+.stage[data-reaction=crown]{--gift-glow:#ffe391bb}.stage[data-reaction=money]{--gift-glow:#77ffb399}
+.stage[data-reaction=disco]{--gift-glow:#8fe9ff99}.stage[data-reaction=rocket]{--gift-glow:#9d9cffbb}
+.stage[data-reaction=universe]{--gift-glow:#c28dffcc}
+.stage:not([data-reaction=idle]) .gift-aura{animation:giftAura 3.2s ease-out 2}
+.stage:is([data-reaction=fireworks],[data-reaction=crown],[data-reaction=rocket],[data-reaction=universe]) .gift-rays{animation:giftRays 2.8s ease-out 2}
+.stage:is([data-reaction=fireworks],[data-reaction=rocket],[data-reaction=universe]) .gift-flash{animation:giftFlash 2.8s ease-out 2}
+.stage[data-reaction=disco] .gift-rays{animation:discoRays 3s linear 2}
+.stage[data-reaction=disco] .gift-aura{animation:discoAura 1s ease-in-out 6}
+.stage[data-reaction=money] .gift-rays{animation:giftRays 2.8s ease-out 2}
+.stage:not([data-reaction=idle]) .message{box-shadow:0 0 35px var(--gift-glow),0 15px 40px #0008;animation:cardPop .55s cubic-bezier(.2,1.7,.35,1) both}
+.particle.float{left:var(--x);bottom:-5%;animation:floatUp var(--d) linear forwards;animation-delay:var(--delay)}
+.particle.burst{left:50%;top:48%;bottom:auto;animation:giftBurst var(--d) ease-out forwards;animation-delay:var(--delay)}
+@keyframes giftAura{0%{opacity:0;transform:scale(.65)}20%{opacity:.95}100%{opacity:0;transform:scale(1.4)}}
+@keyframes giftRays{0%{opacity:0;transform:rotate(-28deg) scale(.7)}25%{opacity:.8}100%{opacity:0;transform:rotate(42deg) scale(1.4)}}
+@keyframes giftFlash{0%,8%{opacity:0}12%{opacity:.7}24%,100%{opacity:0}}
+@keyframes discoRays{0%{opacity:0;transform:rotate(0)}15%,85%{opacity:.8}100%{opacity:0;transform:rotate(190deg)}}
+@keyframes discoAura{0%,100%{opacity:.1;filter:hue-rotate(0deg)}50%{opacity:.9;filter:hue-rotate(140deg)}}
+@keyframes cardPop{0%{transform:scale(.88)}100%{transform:scale(1)}}
+@keyframes giftBurst{0%{opacity:0;transform:translate(0,0) scale(.3)}12%{opacity:1}100%{opacity:0;transform:translate(var(--dx),var(--dy)) rotate(180deg) scale(1.15)}}
+@media(prefers-reduced-motion:reduce){.stage:not([data-reaction=idle]) .gift-aura,.stage:not([data-reaction=idle]) .gift-rays,.stage:not([data-reaction=idle]) .gift-flash,.stage:not([data-reaction=idle]) .message{animation:none}}
