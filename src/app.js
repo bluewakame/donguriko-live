@@ -355,7 +355,8 @@ function startUiServer(config) {
     if (url.pathname === "/state") return sendJson(res, state);
     if (url.pathname === "/manual-speak" && req.method === "POST") return handleManualSpeak(req, res, config);
     if (url.pathname === "/audio/last.wav") return serveAudio(res);
-    if (url.pathname === "/vertical") return serveStatic("/index.html", res);
+    if (url.pathname === "/vertical") { res.writeHead(302, { Location: "/gift-live/index.html?obs=1" }); res.end(); return; }
+    if (url.pathname === "/") { res.writeHead(302, { Location: "/gift-live/index.html" }); res.end(); return; }
     const path = url.pathname === "/" ? "/index.html" : url.pathname;
     await serveStatic(path, res);
   });
@@ -3210,3 +3211,4 @@ main().catch((error) => {
   publish({ status: "fatal", lastError: error.message, replyText: "起動に失敗しちゃった" });
   process.exitCode = 1;
 });
+
