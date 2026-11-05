@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { readFile, writeFile, appendFile, mkdir, copyFile, stat, rm, rename } from "node:fs/promises";
 import { existsSync, createWriteStream } from "node:fs";
-import { join, resolve, extname, basename, sep } from "node:path";
+import { join, resolve, isAbsolute, extname, basename, sep } from "node:path";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -2304,14 +2304,20 @@ function resolveProjectFilePath(value, fallback) {
   return fullPath;
 }
 
+function resolveMarkdownMemoryPath(config) {
+  const path = String(config.memory.markdown.path || DEFAULT_MARKDOWN_MEMORY_PATH);
+  return isAbsolute(path) ? path : resolveProjectFilePath(path, DEFAULT_MARKDOWN_MEMORY_PATH);
+}
+
 async function loadMarkdownMemory(config) {
   if (!config.memory?.enabled || !config.memory.markdown?.enabled) return "";
-  const memoryPath = resolveProjectFilePath(config.memory.markdown.path, DEFAULT_MARKDOWN_MEMORY_PATH);
+  const memoryPath = resolveMarkdownMemoryPath(config);
   try {
     const fileStat = await stat(memoryPath);
     const raw = await readFile(memoryPath, "utf8");
     const trimmed = raw.trim();
     longTermMemoryMtimeMs = fileStat.mtimeMs;
+    console.log(`Markdown記憶: ${memoryPath} (${trimmed.length}文字)`);
     if (!trimmed) return "";
     const maxChars = config.memory.markdown.maxChars;
     return maxChars > 0 ? trimmed.slice(0, maxChars) : trimmed;
@@ -2323,7 +2329,7 @@ async function loadMarkdownMemory(config) {
 
 async function refreshMarkdownMemoryIfChanged(config) {
   if (!config.memory?.enabled || !config.memory.markdown?.enabled || !config.memory.markdown.reloadOnChange) return;
-  const memoryPath = resolveProjectFilePath(config.memory.markdown.path, DEFAULT_MARKDOWN_MEMORY_PATH);
+  const memoryPath = resolveMarkdownMemoryPath(config);
   try {
     const fileStat = await stat(memoryPath);
     if (fileStat.mtimeMs <= longTermMemoryMtimeMs) return;
