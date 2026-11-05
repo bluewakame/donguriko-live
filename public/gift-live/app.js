@@ -38,4 +38,3 @@ function draw(now){
 requestAnimationFrame(draw);
 function onState(s){let t=String(s.commentText||''),signature=`${s.commentAuthor}|${t}`;if(s.commentService==='TikTok'&&t.startsWith('ギフト「')&&signature!==lastGift){lastGift=signature;react(giftKind(t),s.commentAuthor||'視聴者')}speaking=!!s.isSpeaking;if(s.replyText&&speaking)document.getElementById('giftLine').textContent=s.replyText;if(s.audioToken&&s.audioToken!==lastToken){lastToken=s.audioToken;envelope=Array.isArray(s.mouthEnvelope)?s.mouthEnvelope:[];envelopeFrame=s.mouthFrameMs||40;envelopeStart=performance.now()+(s.lipSyncOffsetMs||0);if(s.browserAudio)playSpeech(s.audioToken)}}
 if(new URLSearchParams(location.search).get('obs')==='1')document.body.classList.add('obs');try{let stream=new EventSource('/events');stream.onmessage=e=>onState(JSON.parse(e.data))}catch{}window.GiftLive={react,giftKind};
-
