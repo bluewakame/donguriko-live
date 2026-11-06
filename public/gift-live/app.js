@@ -57,6 +57,22 @@ video.addEventListener('stalled',keepIdlePlaying);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)keepIdlePlaying()});
 setInterval(keepIdlePlaying,2000);
 keepIdlePlaying();
+// 瞬きは短く、間隔を揺らす。ギフト映像中は重ねない。
+const blinkLayer=document.getElementById('blinkLayer');
+function scheduleBlink(){
+  setTimeout(()=>{
+    if(stage.dataset.reaction==='idle'&&!document.hidden&&!matchMedia('(prefers-reduced-motion: reduce)').matches){
+      blinkLayer.animate([
+        {opacity:0,offset:0},{opacity:.92,offset:.28},
+        {opacity:1,offset:.48},{opacity:1,offset:.57},
+        {opacity:.72,offset:.73},{opacity:0,offset:1}
+      ],{duration:180,easing:'ease-in-out'});
+    }
+    scheduleBlink();
+  },5500+Math.random()*5000);
+}
+scheduleBlink();
+if(new URLSearchParams(location.search).has('blink-preview'))document.body.classList.add('blink-preview');
 document.querySelectorAll('[data-gift]').forEach(b=>b.onclick=()=>react(b.dataset.gift));
 function giftKind(value){
   const s=String(value).normalize('NFKC').toLowerCase();

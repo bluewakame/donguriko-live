@@ -46,3 +46,9 @@
 .avatar-video,.lip-layer{animation:idlePresenceLong 10.6s ease-in-out infinite;transform-origin:50% 65%;will-change:transform}
 @keyframes idlePresenceLong{0%,100%{transform:scale(1.018) translate(0,0)}20%{transform:scale(1.032) translate(-3px,-3px)}48%{transform:scale(1.045) translate(1px,-7px)}72%{transform:scale(1.028) translate(4px,-2px)}88%{transform:scale(1.022) translate(2px,1px)}}
 @media(prefers-reduced-motion:reduce){.avatar-video,.lip-layer{animation:none}}
+
+/* 生成した閉眼フレームの両目だけをぼかして合成する。顔全体は差し替えない。 */
+.blink-layer{position:absolute;inset:0;z-index:1;pointer-events:none;opacity:0;background:url("blink-closed-v1.png") center/100% 100% no-repeat;mask-image:radial-gradient(ellipse 8% 3.5% at 43.5% 33%,#000 36%,transparent 100%),radial-gradient(ellipse 8% 3.5% at 60.5% 30.5%,#000 36%,transparent 100%);-webkit-mask-image:radial-gradient(ellipse 8% 3.5% at 43.5% 33%,#000 36%,transparent 100%),radial-gradient(ellipse 8% 3.5% at 60.5% 30.5%,#000 36%,transparent 100%);animation:idlePresenceLong 10.6s ease-in-out infinite;transform-origin:50% 65%;will-change:transform,opacity}
+.stage.reacting .blink-layer{visibility:hidden}
+@media(prefers-reduced-motion:reduce){.blink-layer{animation:none}}
+body.blink-preview .blink-layer{opacity:1!important;visibility:visible!important}
