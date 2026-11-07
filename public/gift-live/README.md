@@ -1,9 +1,9 @@
-# Donguriko TikTok ギフト反応画面（試作）
+# Donguriko 縦型ライブ映像
 
-既存の `Donguriko Live_AI配信アバター` の `public/gift-live/` に組み込み済みです。既存システムを `start-tiktok.bat` で起動して、OBS のブラウザソースを `http://127.0.0.1:8790/vertical`、1080×1920 に設定します。`/` はプレビュー画面、従来のどんぐりこ画面は `/index.html` です。ルート変更を反映するにはサーバーを再起動してください。実際のポートが違う場合は起動ログの `OBS URL` に合わせます。
+start-tiktok.bat で配信システムを起動し、OBS のブラウザソースを http://127.0.0.1:8790/vertical、1080×1920 に設定します。実際のポートは config.json の server.port に合わせてください。画面だけのプレビューは /gift-live/index.html?demo=1 です。
 
-既存の TikTok 接続と Donguriko の TTS を利用します。ギフトは事前に用意した短いお礼をすぐ再生し、再生中に贈り主の名前を音声合成して続けて読み上げます。通常コメントは Gemma で返答を作ります。新しい画面は `/events` から状態を受け取り、ギフトの種類で表情動画を切り替え、音声の音量データで口元の差分を出します。OBS で音声を使う場合は既存の `config.json` で `audio.playInBrowser` を `true` にし、OBS の「音声をOBSで制御する」を有効にします。
+この画面は提供された実写風動画を使います。待機は scene-idle.mp4、新規入室は scene-welcome.mp4、バラなどは scene-wave.mp4、ハートは scene-heart.mp4、お祝い系は scene-celebrate.mp4、通常の発話中は scene-speaking.mp4 です。動画内の音声は除去済みで、Donguriko の既存 TTS を流します。動画の口の動きは音素単位の同期ではありません。
 
-**画質上の制限:** Imagegen の静止画を使った試作です。待機中は目を開けたまま4秒周期で小さく姿勢が動き、ギフト時は笑顔と手振りのポーズになります。手と顔の独立した自然な動画動作は未完成です。接続中の vidIQ では動画生成に必要な120クレジットが不足しており、生成・課金は行われていません。
+TikTok の MEMBER 入室イベントで視聴者名を読み上げて歓迎します。接続直後10秒の入室は流さず、全体で30秒、同じ視聴者は10分の間隔を空けます。config.json の tiktok.replyToJoins、joinGlobalCooldownMs、joinUserCooldownMs で調整できます。
 
-このフォルダの人物画像と派生動画は MIT ライセンスの対象外です。権利者の許可なく再利用・再配布しないでください。
+映像や写真は MIT ライセンスの対象外です。権利者の許可なく再利用・再配布しないでください。

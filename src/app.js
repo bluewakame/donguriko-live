@@ -99,6 +99,8 @@ let state = {
   commentAuthor: "",
   commentService: "",
   commentText: "",
+  commentId: "",
+  commentKind: "",
   replyText: "起動中だよ",
   isSpeaking: false,
   lastError: "",
@@ -185,7 +187,7 @@ async function main() {
 // TikTok は YouTube（わんコメ）と並行して直接つなぐ。どちらのコメントも同じキューに入る。
 function startTikTok(config) {
   runTikTokLoop(config, {
-    onComment: (comment) => enqueueComment(config, comment, { replacePending: true }),
+    onComment: (comment) => enqueueComment(config, comment, { replacePending: comment.kind !== "viewer-enter" }),
     onStatus: (tiktokStatus, error) => publish({ tiktokStatus, ...(error ? { lastError: `TikTok: ${error}` } : {}) })
   }).catch((error) => {
     console.warn(`[TikTok] 停止しました: ${error.message}`);
@@ -969,7 +971,7 @@ function pickLatestOneCommeComment(items) {
 function enqueueComment(config, comment, { force = false, replacePending = false } = {}) {
   markActivity();
   comment = { ...comment, author: safeAuthorName(config, comment.author) };
-  if (!String(comment.id ?? "").startsWith("startup-last:")) {
+  if (comment.kind !== "viewer-enter" && !String(comment.id ?? "").startsWith("startup-last:")) {
     rememberLastComment(config, comment).catch((error) => {
       console.warn(`最後のコメント保存に失敗しました: ${error.message}`);
     });
@@ -1525,6 +1527,8 @@ async function handleComment(config, comment) {
     commentAuthor: comment.author,
     commentService: platformLabel(comment.service),
     commentText: filtered.text,
+    commentId: comment.id || filteredKey,
+    commentKind: comment.kind || "",
     replyText: "考え中だよ...",
     isSpeaking: false,
     lastError: ""
@@ -1554,12 +1558,17 @@ async function handleComment(config, comment) {
   let route = mustThink ? "system-two" : decision.route;
   let reply = "";
   try {
+    const viewerFast = comment.kind === "viewer-enter" ? comment.author + "さん、いらっしゃい！" : "";
     const giftFast = comment.service === "tiktok" && !language && !languageRequest ? fastGiftReply(filtered.text) : "";
     await refreshMarkdownMemoryIfChanged(config);
     const memoryDirect = !mustThink ? directMemoryReply(longTermMemoryText, filtered.text) : "";
     const canned = mustThink ? undefined : makeCannedReply(filtered.text);
-    const toolReply = canned || mustThink || memoryDirect ? undefined : await makeToolReply(config, filtered.text);
-    if (giftFast) {
+    const toolReply = canned || mustThink || memoryDirect || viewerFast ? undefined : await makeToolReply(config, filtered.text);
+    if (viewerFast) {
+      route = "viewer-fast";
+      reply = viewerFast;
+      await speakReply(config, reply, { cache: true, timing });
+    } else if (giftFast) {
       route = "gift-fast";
       reply = giftFast;
       const nameLine = `${comment.author}さん、ありがとう！`;
@@ -1607,7 +1616,7 @@ async function handleComment(config, comment) {
     await speakReply(config, reply, { cache: true, timing });
   }
   reportLatency(route, decision, timing);
-  await rememberTurn(config, { author: comment.author, text: filtered.text }, reply);
+  if (comment.kind !== "viewer-enter") await rememberTurn(config, { author: comment.author, text: filtered.text }, reply);
 
   publish({ status: "listening", isSpeaking: false });
   await sleep(config.bot.cooldownMs);

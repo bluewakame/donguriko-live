@@ -19,6 +19,9 @@
     "minGiftDiamonds": 0,
     "gifts": {},
     "replyToFollows": true,
+    "replyToJoins": true,
+    "joinGlobalCooldownMs": 30000,
+    "joinUserCooldownMs": 600000,
     "reconnectIntervalMs": 10000,
     "offlineRetryMs": 60000
   },

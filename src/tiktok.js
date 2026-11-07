@@ -16,6 +16,9 @@ export function normalizeTikTokConfig(config) {
   tiktok.replyToGifts = tiktok.replyToGifts ?? true;
   tiktok.minGiftDiamonds = Math.max(0, Number(tiktok.minGiftDiamonds ?? 0));
   tiktok.replyToFollows = tiktok.replyToFollows ?? true;
+  tiktok.replyToJoins = tiktok.replyToJoins ?? true;
+  tiktok.joinGlobalCooldownMs = Math.max(10000, Number(tiktok.joinGlobalCooldownMs ?? 30000));
+  tiktok.joinUserCooldownMs = Math.max(60000, Number(tiktok.joinUserCooldownMs ?? 600000));
   normalizeGiftConfig(tiktok);
   return tiktok;
 }
@@ -39,10 +42,11 @@ export async function runTikTokLoop(config, { onComment, onStatus }) {
   }
 
   const seenIds = new Set();
+  const joinGate = { lastAt: 0, users: new Map() };
   let failures = 0;
   while (true) {
     try {
-      await connectOnce(settings, library, seenIds, { onComment, onStatus });
+      await connectOnce(settings, library, seenIds, joinGate, { onComment, onStatus });
       failures = 0;
       console.log("[TikTok] 切断されたので再接続するよ");
       await sleep(settings.reconnectIntervalMs);
@@ -62,7 +66,7 @@ export async function runTikTokLoop(config, { onComment, onStatus }) {
   }
 }
 
-function connectOnce(settings, library, seenIds, { onComment, onStatus }) {
+function connectOnce(settings, library, seenIds, joinGate, { onComment, onStatus }) {
   const { TikTokLiveConnection, WebcastEvent, ControlEvent } = library;
   const connection = new TikTokLiveConnection(settings.uniqueId, {
     ...(settings.signApiKey ? { signApiKey: settings.signApiKey } : {}),
@@ -72,12 +76,12 @@ function connectOnce(settings, library, seenIds, { onComment, onStatus }) {
     processInitialData: false
   });
 
-  const emit = (id, user, text, eventNote = "") => {
+  const emit = (id, user, text, eventNote = "", kind = "") => {
     const key = `tiktok:${id}`;
     if (!id || seenIds.has(key)) return;
     seenIds.add(key);
     if (seenIds.size > 2000) seenIds.delete(seenIds.values().next().value);
-    onComment({ id: key, author: userName(user), text, service: "tiktok", eventNote });
+    onComment({ id: key, author: userName(user), text, service: "tiktok", eventNote, kind });
   };
 
   connection.on(WebcastEvent.CHAT, (data) => {
@@ -104,6 +108,21 @@ function connectOnce(settings, library, seenIds, { onComment, onStatus }) {
   connection.on(WebcastEvent.FOLLOW, (data) => {
     if (!settings.replyToFollows) return;
     emit(messageId(data), data.user, "フォローしたよ", FOLLOW_NOTE);
+  });
+
+  const connectedAt = Date.now();
+  connection.on(WebcastEvent.MEMBER, (data) => {
+    if (!settings.replyToJoins || Date.now() - connectedAt < 10000) return;
+    const user = data.user;
+    const userId = String(user?.uniqueId || user?.userId || user?.nickname || "").trim();
+    if (!userId) return;
+    const now = Date.now();
+    if (now - joinGate.lastAt < settings.joinGlobalCooldownMs) return;
+    if (now - (joinGate.users.get(userId) ?? 0) < settings.joinUserCooldownMs) return;
+    joinGate.lastAt = now;
+    joinGate.users.set(userId, now);
+    if (joinGate.users.size > 1000) joinGate.users.delete(joinGate.users.keys().next().value);
+    emit(messageId(data) || "join:" + userId + ":" + now, user, "入室したよ", "", "viewer-enter");
   });
 
   connection.on(ControlEvent.ERROR, ({ info, exception }) => {

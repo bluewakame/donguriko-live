@@ -1,103 +1,26 @@
-const stage=document.getElementById('stage'),particles=document.getElementById('particles'),video=document.getElementById('avatarVideo'),reactionVideo=document.getElementById('reactionVideo'),lip=document.getElementById('lipLayer');
+const stage=document.getElementById('stage');
+const idleVideo=document.getElementById('idleVideo');
+const actionVideo=document.getElementById('actionVideo');
+const particles=document.getElementById('particles');
+const clips={welcome:'scene-welcome.mp4',wave:'scene-wave.mp4',heart:'scene-heart.mp4',celebrate:'scene-celebrate.mp4',speaking:'scene-speaking.mp4'};
 const gifts={
-  idle:['♡','遊びに来てくれてありがとう','ゆったり配信中','♥',0,'#ffd3d8'],
-  rose:['🌹','バラ、ありがとう！','バラにお礼中','🌹',26,'#ff8aa9'],
-  heart:['💗','ハート、受け取ったよ','ハートをお返し中','♥',36,'#ff79b2'],
-  confetti:['🎉','お祝いありがとう！','お祝い中','✦',72,'#ffe095'],
-  fireworks:['🎆','花火、すごい！','花火にリアクション中','✺',90,'#ffbb6f'],
-  crown:['👑','王冠、ありがとう！','キラキラお祝い中','✦',84,'#ffe09a'],
-  money:['💸','マネーガン！？ありがとう！','感謝が止まらない','💎',90,'#9dffcb'],
-  disco:['🪩','一緒に踊ろう！','ダンス気分','✦',78,'#8ce9ff'],
-  rocket:['🚀','ロケット発射！ありがとう！','宇宙へ出発中','✧',100,'#b7b5ff'],
-  universe:['🌌','ユニバース！？ありがとう！','スペシャルギフトに感謝中','✦',120,'#d9bdff']
+  rose:['🌹','バラ、ありがとう！','バラにお礼中','🌹',24,'#ff8aa9','wave'],
+  heart:['💗','ハート、受け取ったよ','ハートをお返し中','♥',30,'#ff79b2','heart'],
+  confetti:['🎉','お祝いありがとう！','お祝い中','✦',54,'#ffe095','celebrate'],
+  fireworks:['🎆','花火、すごい！','花火にリアクション中','✺',65,'#ffbb6f','celebrate'],
+  crown:['👑','王冠、ありがとう！','キラキラお祝い中','✦',65,'#ffe09a','celebrate'],
+  money:['💸','マネーガン！？ありがとう！','感謝が止まらない','💎',60,'#9dffcb','celebrate'],
+  disco:['🪩','一緒に踊ろう！','ダンス気分','✦',55,'#8ce9ff','celebrate'],
+  rocket:['🚀','ロケット発射！ありがとう！','宇宙へ出発中','✧',70,'#b7b5ff','celebrate'],
+  universe:['🌌','ユニバース！？ありがとう！','スペシャルギフトに感謝中','✦',80,'#d9bdff','celebrate']
 };
-let timer,lastGift='',lastToken='',seenState=false,ctx,source,analyser,samples,envelope=[],envelopeStart=0,envelopeFrame=40,speaking=false;
-function react(kind='idle',from=''){
-  const [icon,title,mode,symbol,count,color]=gifts[kind]||gifts.heart;
-  stage.dataset.reaction='idle'; void stage.offsetWidth; stage.dataset.reaction=kind;
-  stage.dataset.motion=['fireworks','crown','rocket','universe'].includes(kind)?'grand':['confetti','money','disco'].includes(kind)?'party':'sweet';
-  document.getElementById('giftIcon').textContent=icon;
-  document.getElementById('giftTitle').textContent=title;
-  document.getElementById('giftFrom').textContent=from?`${from} さんからのギフト`:'WELCOME GIFT';
-  document.getElementById('modeLabel').textContent=mode;
-  particles.replaceChildren();
-  const burst=['fireworks','crown','rocket','universe'].includes(kind);
-  for(let i=0;i<count;i++){
-    const p=document.createElement('span'),angle=Math.random()*Math.PI*2,radius=burst?120+Math.random()*380:0;
-    p.className=`particle ${burst?'burst':'float'}`;
-    p.textContent=symbol;
-    p.style.setProperty('--x',`${Math.random()*100}%`);
-    p.style.setProperty('--y',`${Math.random()*90}%`);
-    p.style.setProperty('--dx',`${Math.cos(angle)*radius}px`);
-    p.style.setProperty('--dy',`${Math.sin(angle)*radius}px`);
-    p.style.setProperty('--s',`${12+Math.random()*20}px`);
-    p.style.setProperty('--d',`${2.4+Math.random()*2.2}s`);
-    p.style.setProperty('--delay',`${Math.random()*(burst?.65:1.2)}s`);
-    p.style.setProperty('--c',color);
-    particles.append(p);
-  }
-  // 待機映像は止めず、リアクション映像だけを重ねて滑らかに切り替える。
-  if(kind==='idle'){
-    stage.classList.remove('reacting');
-    setTimeout(()=>{if(!stage.classList.contains('reacting'))reactionVideo.pause()},550);
-  }else{
-    reactionVideo.currentTime=0;
-    reactionVideo.playbackRate=stage.dataset.motion==='grand'?1.4:stage.dataset.motion==='party'?1.2:1.05;
-    reactionVideo.play().catch(()=>{});
-    stage.classList.add('reacting');
-  }
-  clearTimeout(timer);
-  if(kind!=='idle')timer=setTimeout(()=>react('idle'),7000);
-}
-// OBS のブラウザソースで一時停止・再描画されても待機映像を復帰させる。
-function keepIdlePlaying(){
-  if(video.paused||video.ended)video.play().catch(()=>{});
-}
-video.addEventListener('pause',()=>setTimeout(keepIdlePlaying,250));
-video.addEventListener('ended',keepIdlePlaying);
-video.addEventListener('stalled',keepIdlePlaying);
-document.addEventListener('visibilitychange',()=>{if(!document.hidden)keepIdlePlaying()});
-setInterval(keepIdlePlaying,2000);
-keepIdlePlaying();
-// 異なる周期の波を合成して、待機中の姿勢と呼吸を継ぎ目なく動かす。
-const idleMotion=document.getElementById('idleMotion');
-const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)');
-function drawIdleMotion(now){
-  if(!reducedMotion.matches){
-    const t=now/1000;
-    const breath=(Math.sin(t*1.15)+1)/2;
-    const sway=Math.sin(t*.36)+.38*Math.sin(t*.83);
-    const x=1.5*sway;
-    const y=-.7*breath+.3*Math.sin(t*.29);
-    const angle=.4*Math.sin(t*.43);
-    const scale=1.032+.035*breath;
-    idleMotion.style.transform=`translate3d(${x.toFixed(3)}%,${y.toFixed(3)}%,0) rotate(${angle.toFixed(3)}deg) scale(${scale.toFixed(4)})`;
-  }
-  requestAnimationFrame(drawIdleMotion);
-}
-requestAnimationFrame(drawIdleMotion);
-// 瞬きは短く、間隔を揺らす。ギフト映像中は重ねない。
-const blinkLayer=document.getElementById('blinkLayer');
-function scheduleBlink(){
-  setTimeout(()=>{
-    if(stage.dataset.reaction==='idle'&&!document.hidden&&!matchMedia('(prefers-reduced-motion: reduce)').matches){
-      blinkLayer.animate([
-        {opacity:0,offset:0},{opacity:.92,offset:.28},
-        {opacity:1,offset:.48},{opacity:1,offset:.57},
-        {opacity:.72,offset:.73},{opacity:0,offset:1}
-      ],{duration:180,easing:'ease-in-out'});
-    }
-    scheduleBlink();
-  },5500+Math.random()*5000);
-}
-scheduleBlink();
-if(new URLSearchParams(location.search).has('blink-preview'))document.body.classList.add('blink-preview');
-document.querySelectorAll('[data-gift]').forEach(b=>b.onclick=()=>react(b.dataset.gift));
+let activeScene='',actionFinished=false,speechActive=false,seenState=false,lastCommentId='',lastToken='',audioContext,audioSource,sceneTimeout;
+
 function giftKind(value){
   const s=String(value).normalize('NFKC').toLowerCase();
   if(/universe|galaxy|ユニバース|ギャラクシー|インターステラー/.test(s))return'universe';
   if(/rocket|ロケット|ジェット/.test(s))return'rocket';
-  if(/disco|mirror ball|ミラーボール|ディスコ/.test(s))return'disco';
+  if(/disco|ミラーボール|ディスコ/.test(s))return'disco';
   if(/money|マネー|札束/.test(s))return'money';
   if(/crown|王冠/.test(s))return'crown';
   if(/firework|花火/.test(s))return'fireworks';
@@ -105,38 +28,121 @@ function giftKind(value){
   if(/rose|rosa|バラ/.test(s))return'rose';
   return'heart';
 }
-async function playSpeech(token){try{ctx??=new (window.AudioContext||window.webkitAudioContext)();await ctx.resume();let response=await fetch(`/audio/last.wav?t=${encodeURIComponent(token)}`,{cache:'no-store'});if(!response.ok)return;let buffer=await ctx.decodeAudioData(await response.arrayBuffer());if(source){source.onended=null;try{source.stop()}catch{}}source=ctx.createBufferSource();source.buffer=buffer;analyser=ctx.createAnalyser();analyser.fftSize=1024;samples=new Uint8Array(analyser.fftSize);source.connect(analyser);analyser.connect(ctx.destination);source.onended=()=>{analyser=null;source=null};source.start()}catch(e){console.warn(e)}}
-document.addEventListener("pointerdown",()=>ctx?.resume().catch(()=>{}));
-const clamp=(value,min,max)=>Math.min(max,Math.max(min,value));
-let smoothMouth=0,lastMouthFrame=0;
-function mouth(now){
-  if(analyser&&samples){
-    analyser.getByteTimeDomainData(samples);
-    let sum=0;
-    for(let x of samples){x=(x-128)/128;sum+=x*x}
-    return clamp(Math.sqrt(sum/samples.length)*5.5,0,1);
-  }
-  if(envelope.length){
-    const position=(now-envelopeStart)/envelopeFrame;
-    if(position>=0&&position<envelope.length){
-      const start=Math.floor(position),fraction=position-start;
-      const a=envelope[start]||0,b=envelope[Math.min(start+1,envelope.length-1)]||0;
-      return clamp(a+(b-a)*fraction,0,1);
-    }
-  }
-  return 0;
+function showScene(scene){
+  clearTimeout(sceneTimeout);
+  activeScene=scene;
+  actionFinished=false;
+  const file=clips[scene];
+  if(!file)return;
+  const begin=()=>{
+    if(activeScene!==scene)return;
+    actionVideo.loop=scene==='speaking';
+    actionVideo.currentTime=0;
+    actionVideo.play().catch(()=>{});
+    stage.classList.add('scene-active');
+  };
+  if(actionVideo.dataset.file!==file){
+    actionVideo.dataset.file=file;
+    actionVideo.src=file;
+    actionVideo.load();
+    actionVideo.addEventListener('loadeddata',begin,{once:true});
+  }else if(actionVideo.readyState>=2)begin();
+  else actionVideo.addEventListener('loadeddata',begin,{once:true});
 }
-function draw(now){
-  const elapsed=lastMouthFrame?clamp(now-lastMouthFrame,0,64):16;
-  lastMouthFrame=now;
-  const level=stage.dataset.reaction==='idle'?mouth(now):0;
-  if(stage.dataset.reaction!=='idle'){smoothMouth=0;lip.style.opacity='0';requestAnimationFrame(draw);return;}
-  const target=level<0.015?0:0.1+Math.pow(level,0.65)*0.9;
-  const response=target>smoothMouth?55:105;
-  smoothMouth+=(target-smoothMouth)*(1-Math.exp(-elapsed/response));
-  lip.style.opacity=String(clamp(smoothMouth,0,1));
-  requestAnimationFrame(draw);
+function clearScene(){
+  activeScene='';
+  actionFinished=false;
+  stage.classList.remove('scene-active');
+  stage.dataset.reaction='idle';
+  particles.replaceChildren();
+  document.getElementById('modeLabel').textContent='ゆったり配信中';
+  setTimeout(()=>{if(!activeScene)actionVideo.pause()},450);
 }
-requestAnimationFrame(draw);
-function onState(s){if(!seenState){seenState=true;lastToken=s.audioToken||'';}let t=String(s.commentText||''),signature=`${s.commentAuthor}|${t}`;if(s.commentService==='TikTok'&&t.startsWith('ギフト「')&&signature!==lastGift){lastGift=signature;react(giftKind(t),s.commentAuthor||'視聴者')}speaking=!!s.isSpeaking;if(s.replyText&&speaking)document.getElementById('giftLine').textContent=s.replyText;if(s.audioToken&&s.audioToken!==lastToken){lastToken=s.audioToken;envelope=Array.isArray(s.mouthEnvelope)?s.mouthEnvelope:[];envelopeFrame=s.mouthFrameMs||40;envelopeStart=performance.now()+(s.lipSyncOffsetMs||0);if(s.browserAudio&&s.isSpeaking)playSpeech(s.audioToken)}}
-if(new URLSearchParams(location.search).get('obs')==='1')document.body.classList.add('obs');try{let stream=new EventSource('/events');stream.onmessage=e=>onState(JSON.parse(e.data))}catch{}window.GiftLive={react,giftKind};
+function returnAfterAction(){
+  if(activeScene==='speaking')return;
+  if(speechActive)return;
+  clearScene();
+}
+actionVideo.addEventListener('ended',()=>{actionFinished=true;returnAfterAction()});
+function addParticles(symbol,count,color){
+  particles.replaceChildren();
+  for(let i=0;i<count;i++){
+    const p=document.createElement('span');p.className='particle';p.textContent=symbol;
+    p.style.setProperty('--x',Math.random()*100+'%');
+    p.style.setProperty('--s',12+Math.random()*20+'px');
+    p.style.setProperty('--d',2+Math.random()*2.5+'s');
+    p.style.setProperty('--delay',Math.random()*.8+'s');
+    p.style.setProperty('--c',color);particles.append(p);
+  }
+}
+function showEvent(kind,author=''){
+  let icon,title,mode,symbol,count,color,scene;
+  if(kind==='welcome'){
+    [icon,title,mode,symbol,count,color,scene]=['👋',author?author+'さん、いらっしゃい！':'いらっしゃい！','新しい視聴者を歓迎中','✦',20,'#ffddaa','welcome'];
+  }else if(kind==='follow'){
+    [icon,title,mode,symbol,count,color,scene]=['💗',author?author+'さん、フォローありがとう！':'フォローありがとう！','フォローに感謝中','♥',25,'#ff99c3','wave'];
+  }else{
+    [icon,title,mode,symbol,count,color,scene]=gifts[kind]||gifts.heart;
+  }
+  stage.dataset.reaction=kind;
+  document.getElementById('giftIcon').textContent=icon;
+  document.getElementById('giftTitle').textContent=title;
+  document.getElementById('giftFrom').textContent=author?author+' さん':'WELCOME';
+  document.getElementById('modeLabel').textContent=mode;
+  addParticles(symbol,count,color);
+  showScene(scene);
+  // SSE が途切れても映像を固定したままにしない。
+  sceneTimeout=setTimeout(()=>{speechActive=false;clearScene()},15000);
+}
+async function playSpeech(token){
+  try{
+    audioContext??=new (window.AudioContext||window.webkitAudioContext)();
+    await audioContext.resume();
+    const response=await fetch('/audio/last.wav?t='+encodeURIComponent(token),{cache:'no-store'});
+    if(!response.ok)return;
+    const buffer=await audioContext.decodeAudioData(await response.arrayBuffer());
+    if(audioSource){audioSource.onended=null;try{audioSource.stop()}catch{}}
+    audioSource=audioContext.createBufferSource();audioSource.buffer=buffer;
+    audioSource.connect(audioContext.destination);
+    audioSource.onended=()=>{audioSource=null};
+    audioSource.start();
+  }catch(error){console.warn(error)}
+}
+document.addEventListener('pointerdown',()=>audioContext?.resume().catch(()=>{}));
+function onState(s){
+  const currentId=String(s.commentId||'');
+  const newEvent=currentId&&currentId!==lastCommentId&&
+    (seenState||s.isSpeaking||s.status==='thinking');
+  if(!seenState){seenState=true;lastToken=s.audioToken||''}
+  if(currentId)lastCommentId=currentId;
+  speechActive=!!s.isSpeaking;
+  if(newEvent&&s.commentService==='TikTok'){
+    const text=String(s.commentText||'');
+    if(s.commentKind==='viewer-enter')showEvent('welcome',s.commentAuthor||'視聴者');
+    else if(text.startsWith('ギフト「'))showEvent(giftKind(text),s.commentAuthor||'視聴者');
+    else if(text==='フォローしたよ')showEvent('follow',s.commentAuthor||'視聴者');
+  }
+  if(s.replyText&&s.isSpeaking)document.getElementById('giftLine').textContent=s.replyText;
+  if(s.isSpeaking){
+    if(!activeScene)showScene('speaking');
+  }else if(activeScene==='speaking'||(activeScene&&actionFinished))clearScene();
+  if(s.audioToken&&s.audioToken!==lastToken){
+    lastToken=s.audioToken;
+    if(s.browserAudio&&s.isSpeaking)playSpeech(s.audioToken);
+  }
+}
+function keepIdlePlaying(){if(idleVideo.paused||idleVideo.ended)idleVideo.play().catch(()=>{})}
+idleVideo.addEventListener('pause',()=>setTimeout(keepIdlePlaying,250));
+setInterval(keepIdlePlaying,2000);keepIdlePlaying();
+document.querySelectorAll('[data-preview]').forEach(button=>button.onclick=()=>{
+  const kind=button.dataset.preview;
+  if(kind==='idle'){speechActive=false;clearScene()}
+  else if(kind==='speaking')showScene('speaking');
+  else showEvent(kind);
+});
+if(new URLSearchParams(location.search).get('obs')==='1')document.body.classList.add('obs');
+if(!new URLSearchParams(location.search).has('demo')){
+  const stream=new EventSource('/events');
+  stream.onmessage=event=>{try{onState(JSON.parse(event.data))}catch(error){console.warn(error)}};
+}
+window.GiftLive={showEvent,giftKind};
