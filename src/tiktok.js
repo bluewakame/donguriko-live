@@ -110,7 +110,7 @@ function connectOnce(settings, library, seenIds, joinGate, { onComment, onStatus
     emit(messageId(data), data.user, "フォローしたよ", FOLLOW_NOTE);
   });
 
-  const connectedAt = Date.now();
+  let connectedAt = Infinity;
   connection.on(WebcastEvent.MEMBER, (data) => {
     if (!settings.replyToJoins || Date.now() - connectedAt < 10000) return;
     const user = data.user;
@@ -140,6 +140,7 @@ function connectOnce(settings, library, seenIds, joinGate, { onComment, onStatus
     });
     connection.connect()
       .then((state) => {
+        connectedAt = Date.now();
         console.log(`[TikTok] @${settings.uniqueId} の配信につながったよ (roomId: ${state.roomId})`);
         onStatus("tiktok-connected", "");
       })
