@@ -62,3 +62,8 @@ body.blink-preview .blink-layer{opacity:1!important;visibility:visible!important
 @keyframes motionParty{0%,100%{transform:scale(1.04) translate(0,0) rotate(0)}25%{transform:scale(1.075) translate(-9px,-11px) rotate(-.55deg)}55%{transform:scale(1.065) translate(8px,-4px) rotate(.65deg)}80%{transform:scale(1.08) translate(-3px,-9px) rotate(-.2deg)}}
 @keyframes motionGrand{0%,100%{transform:scale(1.045) translate(0,0) rotate(0)}20%{transform:scale(1.095) translate(-13px,-14px) rotate(-.9deg)}50%{transform:scale(1.08) translate(12px,1px) rotate(.9deg)}75%{transform:scale(1.105) translate(-7px,-12px) rotate(-.5deg)}}
 @media(prefers-reduced-motion:reduce){.stage.reacting .reaction-video{animation:none!important}}
+
+/* 待機映像、瞬き、口元を同じ合成レイヤーとして連続移動させる。 */
+.idle-motion{position:absolute;inset:0;z-index:0;transform-origin:50% 65%;will-change:transform}
+.idle-motion .avatar-video,.idle-motion .blink-layer,.idle-motion .lip-layer{animation:none;transform:none;transform-origin:center}
+@media(prefers-reduced-motion:reduce){.idle-motion{transform:none!important}}

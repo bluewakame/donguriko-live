@@ -59,6 +59,23 @@ video.addEventListener('stalled',keepIdlePlaying);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)keepIdlePlaying()});
 setInterval(keepIdlePlaying,2000);
 keepIdlePlaying();
+// 異なる周期の波を合成して、待機中の姿勢と呼吸を継ぎ目なく動かす。
+const idleMotion=document.getElementById('idleMotion');
+const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)');
+function drawIdleMotion(now){
+  if(!reducedMotion.matches){
+    const t=now/1000;
+    const breath=(Math.sin(t*1.15)+1)/2;
+    const sway=Math.sin(t*.36)+.38*Math.sin(t*.83);
+    const x=1.5*sway;
+    const y=-.7*breath+.3*Math.sin(t*.29);
+    const angle=.4*Math.sin(t*.43);
+    const scale=1.032+.035*breath;
+    idleMotion.style.transform=`translate3d(${x.toFixed(3)}%,${y.toFixed(3)}%,0) rotate(${angle.toFixed(3)}deg) scale(${scale.toFixed(4)})`;
+  }
+  requestAnimationFrame(drawIdleMotion);
+}
+requestAnimationFrame(drawIdleMotion);
 // 瞬きは短く、間隔を揺らす。ギフト映像中は重ねない。
 const blinkLayer=document.getElementById('blinkLayer');
 function scheduleBlink(){
