@@ -52,3 +52,13 @@
 .stage.reacting .blink-layer{visibility:hidden}
 @media(prefers-reduced-motion:reduce){.blink-layer{animation:none}}
 body.blink-preview .blink-layer{opacity:1!important;visibility:visible!important}
+
+/* ギフトの強さで手振り映像の動き方を変える。 */
+.stage.reacting[data-motion=sweet] .reaction-video{animation:motionSweet 2.2s ease-in-out infinite}
+.stage.reacting[data-motion=party] .reaction-video{animation:motionParty 1.55s ease-in-out infinite}
+.stage.reacting[data-motion=grand] .reaction-video{animation:motionGrand 1.1s ease-in-out infinite}
+.stage.reacting[data-motion=grand] .gift-flash{filter:drop-shadow(0 0 28px #fff)}
+@keyframes motionSweet{0%,100%{transform:scale(1.025) translate(0,0)}30%{transform:scale(1.045) translate(-4px,-5px)}65%{transform:scale(1.038) translate(4px,-2px)}}
+@keyframes motionParty{0%,100%{transform:scale(1.04) translate(0,0) rotate(0)}25%{transform:scale(1.075) translate(-9px,-11px) rotate(-.55deg)}55%{transform:scale(1.065) translate(8px,-4px) rotate(.65deg)}80%{transform:scale(1.08) translate(-3px,-9px) rotate(-.2deg)}}
+@keyframes motionGrand{0%,100%{transform:scale(1.045) translate(0,0) rotate(0)}20%{transform:scale(1.095) translate(-13px,-14px) rotate(-.9deg)}50%{transform:scale(1.08) translate(12px,1px) rotate(.9deg)}75%{transform:scale(1.105) translate(-7px,-12px) rotate(-.5deg)}}
+@media(prefers-reduced-motion:reduce){.stage.reacting .reaction-video{animation:none!important}}

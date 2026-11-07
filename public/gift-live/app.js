@@ -15,6 +15,7 @@ let timer,lastGift='',lastToken='',seenState=false,ctx,source,analyser,samples,e
 function react(kind='idle',from=''){
   const [icon,title,mode,symbol,count,color]=gifts[kind]||gifts.heart;
   stage.dataset.reaction='idle'; void stage.offsetWidth; stage.dataset.reaction=kind;
+  stage.dataset.motion=['fireworks','crown','rocket','universe'].includes(kind)?'grand':['confetti','money','disco'].includes(kind)?'party':'sweet';
   document.getElementById('giftIcon').textContent=icon;
   document.getElementById('giftTitle').textContent=title;
   document.getElementById('giftFrom').textContent=from?`${from} さんからのギフト`:'WELCOME GIFT';
@@ -41,6 +42,7 @@ function react(kind='idle',from=''){
     setTimeout(()=>{if(!stage.classList.contains('reacting'))reactionVideo.pause()},550);
   }else{
     reactionVideo.currentTime=0;
+    reactionVideo.playbackRate=stage.dataset.motion==='grand'?1.4:stage.dataset.motion==='party'?1.2:1.05;
     reactionVideo.play().catch(()=>{});
     stage.classList.add('reacting');
   }
