@@ -1,11 +1,12 @@
 import { createServer } from "node:http";
 import { readFile, writeFile, appendFile, mkdir, copyFile, stat, rm, rename } from "node:fs/promises";
 import { existsSync, createWriteStream } from "node:fs";
-import { join, resolve, extname, basename, sep } from "node:path";
+import { join, resolve, isAbsolute, extname, basename, sep } from "node:path";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { createSystemOne } from "./system-one.js";
+import { relevantMemoryFacts, directMemoryReply } from "./memory-relevance.js";
 import { findUnsafeReason, isDistress, DISTRESS_REPLY, SAFE_REPLY, SAFETY_PROMPT } from "./safety.js";
 import { normalizeTikTokConfig, runTikTokLoop } from "./tiktok.js";
 import { isEnglishComment, joinSentences, parseLanguageRequest, toJapaneseReading } from "./language.js";
@@ -355,7 +356,8 @@ function startUiServer(config) {
     if (url.pathname === "/state") return sendJson(res, state);
     if (url.pathname === "/manual-speak" && req.method === "POST") return handleManualSpeak(req, res, config);
     if (url.pathname === "/audio/last.wav") return serveAudio(res);
-    if (url.pathname === "/vertical") return serveStatic("/index.html", res);
+    if (url.pathname === "/vertical") { res.writeHead(302, { Location: "/gift-live/index.html?obs=1" }); res.end(); return; }
+    if (url.pathname === "/") { res.writeHead(302, { Location: "/gift-live/index.html" }); res.end(); return; }
     const path = url.pathname === "/" ? "/index.html" : url.pathname;
     await serveStatic(path, res);
   });
@@ -1492,6 +1494,22 @@ async function resolveLiveChatId(config) {
   throw new Error("有効な自分のライブ配信が見つかりません。配信を開始するか broadcastId を設定してください。");
 }
 
+const FAST_GIFT_REPLIES = {
+  rose: "バラありがとう！とってもうれしいよ。",
+  heart: "ハートありがとう！私からもハートを送るね。",
+  celebration: "すごいギフトありがとう！一緒に盛り上がろう。",
+  universe: "えっ、ユニバース！？本当にありがとう！",
+  other: "ギフトありがとう！すっごくうれしいよ。"
+};
+
+function fastGiftReply(text) {
+  if (!String(text).startsWith("ギフト「")) return "";
+  if (/ユニバース|ギャラクシー|ロケット|プライベートジェット|インターステラー/.test(text)) return FAST_GIFT_REPLIES.universe;
+  if (/花火|紙吹雪|王冠|マネーガン/.test(text)) return FAST_GIFT_REPLIES.celebration;
+  if (/バラ|ローザ/.test(text)) return FAST_GIFT_REPLIES.rose;
+  if (/ハート|ラブユー/.test(text)) return FAST_GIFT_REPLIES.heart;
+  return FAST_GIFT_REPLIES.other;
+}
 async function handleComment(config, comment) {
   const filtered = filterComment(config, comment.text);
   if (!filtered.ok) {
@@ -1536,9 +1554,36 @@ async function handleComment(config, comment) {
   let route = mustThink ? "system-two" : decision.route;
   let reply = "";
   try {
+    const giftFast = comment.service === "tiktok" && !language && !languageRequest ? fastGiftReply(filtered.text) : "";
+    await refreshMarkdownMemoryIfChanged(config);
+    const memoryDirect = !mustThink ? directMemoryReply(longTermMemoryText, filtered.text) : "";
     const canned = mustThink ? undefined : makeCannedReply(filtered.text);
-    const toolReply = canned || mustThink ? undefined : await makeToolReply(config, filtered.text);
-    if (canned || toolReply) {
+    const toolReply = canned || mustThink || memoryDirect ? undefined : await makeToolReply(config, filtered.text);
+    if (giftFast) {
+      route = "gift-fast";
+      reply = giftFast;
+      const nameLine = `${comment.author}さん、ありがとう！`;
+      // 初回でもお礼音声を先に生成し、その間に名前の音声も用意する。
+      const giftAudio = synthesizeForSpeech(config, reply, { cache: true }).catch((error) => {
+        publish({ lastError: error.message });
+        return "";
+      });
+      const nameAudio = synthesizeForSpeech(config, nameLine, { cache: true }).catch((error) => {
+        publish({ lastError: error.message });
+        return "";
+      });
+      const giftWav = await giftAudio;
+      if (giftWav) await playSegment(config, giftWav, reply, timing);
+      const nameWav = await nameAudio;
+      if (nameWav) {
+        reply = joinSentences(reply, nameLine);
+        await playSegment(config, nameWav, reply, timing);
+      }
+    } else if (memoryDirect) {
+      route = "memory-direct";
+      reply = memoryDirect;
+      await speakReply(config, reply, { cache: true, timing });
+    } else if (canned || toolReply) {
       route = canned ? "canned" : "tool";
       // 定型文は trimReply を通すと「どんぐりこだよ。」が自己紹介除去で消えてしまうのでそのまま使う。
       reply = canned ?? trimReply(toolReply, config.bot.maxReplyChars);
@@ -1734,9 +1779,10 @@ async function playSegment(config, wavPath, displayText, timing, { onStart } = {
       isSpeaking: true,
       audioToken: `${Date.now()}-${++audioTokenCounter}`,
       audioMs: lipSync.durationMs,
-      // ブラウザで再生するときは再生中の音量から口を動かすので包絡線は送らない
-      mouthEnvelope: useBrowserAudio ? [] : lipSync.envelope,
-      mouthFrameMs: useBrowserAudio ? 0 : lipSync.frameMs,
+      // ブラウザ音声がブロックされても口が止まらないよう、包絡線は常に送る。
+      browserAudio: useBrowserAudio,
+      mouthEnvelope: lipSync.envelope,
+      mouthFrameMs: lipSync.frameMs,
       lipSyncOffsetMs: useBrowserAudio ? 0 : config.audio.lipSyncOffsetMs
     });
   };
@@ -1816,6 +1862,7 @@ async function warmUpOllama(config) {
 // 即答・相づち・定型文の音声を先に合成してディスクに保存しておく。コメント処理中は合成しない。
 async function prewarmTtsCache(config, { quiet = true } = {}) {
   const phrases = [...new Set([
+    ...Object.values(FAST_GIFT_REPLIES),
     ...systemOne.allPhrases(),
     NAME_REPLY,
     MODEL_REPLY,
@@ -1860,6 +1907,7 @@ function ttsCachePath(config, text) {
 }
 
 // キャッシュがあれば合成を省く。cache=true の時だけ新しく作った音声をキャッシュへ保存する。
+const pendingTtsCache = new Map();
 async function synthesizeForSpeech(config, text, { cache = false } = {}) {
   const cachePath = ttsCachePath(config, text);
   if (existsSync(cachePath)) return cachePath;
@@ -1867,10 +1915,15 @@ async function synthesizeForSpeech(config, text, { cache = false } = {}) {
     const segmentPath = join(TTS_SEGMENT_DIR, `segment-${ttsSegmentCounter++ % TTS_SEGMENT_SLOTS}.wav`);
     return synthesizeVoice(config, text, segmentPath);
   }
-  const tmpPath = `${cachePath}.${process.pid}.tmp`;
-  await synthesizeVoice(config, text, tmpPath);
-  await rename(tmpPath, cachePath);
-  return cachePath;
+  if (pendingTtsCache.has(cachePath)) return pendingTtsCache.get(cachePath);
+  const work = (async () => {
+    const tmpPath = `${cachePath}.${process.pid}.tmp`;
+    await synthesizeVoice(config, text, tmpPath);
+    await rename(tmpPath, cachePath);
+    return cachePath;
+  })();
+  pendingTtsCache.set(cachePath, work);
+  try { return await work; } finally { pendingTtsCache.delete(cachePath); }
 }
 
 function makeCannedReply(text) {
@@ -2258,14 +2311,20 @@ function resolveProjectFilePath(value, fallback) {
   return fullPath;
 }
 
+function resolveMarkdownMemoryPath(config) {
+  const path = String(config.memory.markdown.path || DEFAULT_MARKDOWN_MEMORY_PATH);
+  return isAbsolute(path) ? path : resolveProjectFilePath(path, DEFAULT_MARKDOWN_MEMORY_PATH);
+}
+
 async function loadMarkdownMemory(config) {
   if (!config.memory?.enabled || !config.memory.markdown?.enabled) return "";
-  const memoryPath = resolveProjectFilePath(config.memory.markdown.path, DEFAULT_MARKDOWN_MEMORY_PATH);
+  const memoryPath = resolveMarkdownMemoryPath(config);
   try {
     const fileStat = await stat(memoryPath);
     const raw = await readFile(memoryPath, "utf8");
     const trimmed = raw.trim();
     longTermMemoryMtimeMs = fileStat.mtimeMs;
+    console.log(`Markdown記憶: ${memoryPath} (${trimmed.length}文字)`);
     if (!trimmed) return "";
     const maxChars = config.memory.markdown.maxChars;
     return maxChars > 0 ? trimmed.slice(0, maxChars) : trimmed;
@@ -2277,7 +2336,7 @@ async function loadMarkdownMemory(config) {
 
 async function refreshMarkdownMemoryIfChanged(config) {
   if (!config.memory?.enabled || !config.memory.markdown?.enabled || !config.memory.markdown.reloadOnChange) return;
-  const memoryPath = resolveProjectFilePath(config.memory.markdown.path, DEFAULT_MARKDOWN_MEMORY_PATH);
+  const memoryPath = resolveMarkdownMemoryPath(config);
   try {
     const fileStat = await stat(memoryPath);
     if (fileStat.mtimeMs <= longTermMemoryMtimeMs) return;
@@ -2343,7 +2402,7 @@ function hasContextReference(text) {
 function formatLongTermMemory() {
   if (!longTermMemoryText) return "";
   return [
-    "Dongurikoの長期記憶メモです。性格、好み、配信方針の参考として必要な部分だけ自然に反映してください。",
+    "Dongurikoの長期記憶メモです。自分の年齢・好み・設定について明記された内容は、質問された時の答えとして優先してください。",
     "メモの文章をそのままコピーせず、今回のコメントに関係する内容だけを使ってください。",
     "同じ言葉、同じ語尾、同じ口癖を繰り返さないでください。",
     "ただし、メモを読んだことやファイル名は返答に出さないでください。",
@@ -2412,6 +2471,10 @@ const MIXED_ENGLISH_PROMPT = "コメントに英単語が混ざっていたら�
 async function buildReplyPrompts(config, author, text, { service = "", eventNote = "", language = null, dialect = false } = {}) {
   await refreshMarkdownMemoryIfChanged(config);
   const longTermMemoryPrompt = formatLongTermMemory();
+  const relevantFacts = relevantMemoryFacts(longTermMemoryText, text);
+  const relevantFactPrompt = relevantFacts.length
+    ? `今回の質問に関係するどんぐりこの記憶:\n${relevantFacts.join("\n")}\n自分の年齢・好み・設定を直接聞かれたら、このキャラクター設定の答えを一文目で伝えてください。一般論や聞き返しで避けないでください。\n`
+    : "";
   const memoryPrompt = formatShortTermMemory(config, author, text);
   const nickname = sanitizeNickname(author);
   const platform = platformLabel(service);
@@ -2424,8 +2487,8 @@ async function buildReplyPrompts(config, author, text, { service = "", eventNote
   // 答えの欄にも言語を書いておくと、小さいモデルでも指定の言語で書き始めやすい。
   const answerLabel = language ? `返答（${language}）` : "返答";
   return {
-    prompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n今回のコメントだけに自然に返してください。直前の話題は、コメントが明確に続きだと分かる時だけ使ってください。絵文字だけ、相づちだけ、定型文だけで終わらず、コメント内容に具体的に反応してください。\n\n${memoryPrompt}${currentDateTimeLine(config)}${nicknameLine}${eventLine}コメント: ${text}\n${languageLine}\n${answerLabel}:`,
-    retryPrompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n次のコメントに${retryLength}具体的に返してください。定型文だけで終わらず、コメント内容に触れてください。\n${currentDateTimeLine(config)}コメント: ${text}\n${languageLine}\n${answerLabel}:`
+    prompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n今回のコメントだけに自然に返してください。直前の話題は、コメントが明確に続きだと分かる時だけ使ってください。絵文字だけ、相づちだけ、定型文だけで終わらず、コメント内容に具体的に反応してください。\n\n${memoryPrompt}${currentDateTimeLine(config)}${nicknameLine}${eventLine}コメント: ${text}\n${relevantFactPrompt}\n${languageLine}\n${answerLabel}:`,
+    retryPrompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n次のコメントに${retryLength}具体的に返してください。定型文だけで終わらず、コメント内容に触れてください。\n${currentDateTimeLine(config)}コメント: ${text}\n${relevantFactPrompt}${languageLine}\n${answerLabel}:`
   };
 }
 

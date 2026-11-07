@@ -82,7 +82,7 @@
     "temperature": 0.65,
     "topP": 0.9,
     "repeatPenalty": 1.25,
-    "numPredict": 150,
+    "numPredict": 96,
     "stream": true,
     "keepAlive": "30m",
     "warmUp": true
@@ -110,7 +110,7 @@
       "caption": "",
       "refWav": "",
       "appRoot": "",
-      "numSteps": 40,
+      "numSteps": 28,
       "numCandidates": 1,
       "seed": "",
       "durationScale": 1,
@@ -128,8 +128,8 @@
   "bot": {
     "displayName": "Donguriko",
     "maxCommentLength": 160,
-    "maxReplyChars": 180,
-    "cooldownMs": 1000,
+    "maxReplyChars": 110,
+    "cooldownMs": 150,
     "maxQueueSize": 5,
     "replyLastCommentOnStartup": true,
     "ngWords": [
@@ -171,7 +171,7 @@
   },
   "audio": {
     "playGeneratedAudio": true,
-    "playInBrowser": false,
+    "playInBrowser": true,
     "lipSyncOffsetMs": 120,
     "persistentPlayer": true
   }
