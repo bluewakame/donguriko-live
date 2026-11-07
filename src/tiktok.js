@@ -3,6 +3,10 @@
 
 import { describeGift, normalizeGiftConfig } from "./gifts.js";
 
+export function isTikTokOffline(error) {
+  return /requested user isn't online|useroffline|user is offline/i.test(String(error?.message ?? error ?? ""));
+}
+
 const FOLLOW_NOTE = "この視聴者がたった今フォローしてくれました。うれしそうにお礼を言ってください。";
 
 export function normalizeTikTokConfig(config) {
@@ -44,15 +48,19 @@ export async function runTikTokLoop(config, { onComment, onStatus }) {
   const seenIds = new Set();
   const joinGate = { lastAt: 0, users: new Map() };
   let failures = 0;
+  let offlineReported = false;
   while (true) {
     try {
       await connectOnce(settings, library, seenIds, joinGate, { onComment, onStatus });
       failures = 0;
+      offlineReported = false;
       console.log("[TikTok] 切断されたので再接続するよ");
       await sleep(settings.reconnectIntervalMs);
     } catch (error) {
-      if (error instanceof library.UserOfflineError) {
+      if (error instanceof library.UserOfflineError || isTikTokOffline(error)) {
         failures = 0;
+        if (!offlineReported) console.log("[TikTok] 配信開始待ち。ライブが始まると自動接続します");
+        offlineReported = true;
         onStatus("tiktok-offline", "");
         await sleep(settings.offlineRetryMs);
         continue;
@@ -126,6 +134,7 @@ function connectOnce(settings, library, seenIds, joinGate, { onComment, onStatus
   });
 
   connection.on(ControlEvent.ERROR, ({ info, exception }) => {
+    if (isTikTokOffline({ message: [info, exception?.message].filter(Boolean).join(" ") })) return;
     console.warn(`[TikTok] エラー: ${info ?? ""} ${exception?.message ?? ""}`.trim());
   });
 
