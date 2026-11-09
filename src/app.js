@@ -284,6 +284,7 @@ function normalizeBotConfig(config) {
   config.bot.displayName = config.bot.displayName ?? "どんぐりこ";
   config.bot.maxCommentLength = config.bot.maxCommentLength ?? 160;
   config.bot.maxReplyChars = config.bot.maxReplyChars ?? 180;
+  config.bot.detailedReplyChars = Math.max(config.bot.maxReplyChars, Number(config.bot.detailedReplyChars ?? 320));
   config.bot.cooldownMs = config.bot.cooldownMs ?? 1000;
   config.bot.maxQueueSize = Math.max(1, Number(config.bot.maxQueueSize ?? 5));
   config.bot.replyLastCommentOnStartup = config.bot.replyLastCommentOnStartup ?? true;
@@ -1552,9 +1553,11 @@ async function handleComment(config, comment) {
   const foreign = Boolean(language) && !dialect;
   const replyInfo = { ...comment, language, dialect };
   // 外国語は同じ内容でも文字数が多いので、返事の長さの上限を広げる。
-  const maxReplyChars = foreign ? Math.round(config.bot.maxReplyChars * 2.5) : config.bot.maxReplyChars;
+  const detailed = needsDetailedAnswer(filtered.text) && !comment.eventNote;
+  const baseReplyChars = detailed ? config.bot.detailedReplyChars : config.bot.maxReplyChars;
+  const maxReplyChars = foreign ? Math.round(baseReplyChars * 2.5) : baseReplyChars;
   // ギフトやフォロー、言語の指定があるときは、即答・定型文・天気（どれも標準語の日本語）に回さず必ず LLM に考えさせる。
-  const mustThink = Boolean(comment.eventNote) || Boolean(language) || Boolean(languageRequest);
+  const mustThink = detailed || Boolean(comment.eventNote) || Boolean(language) || Boolean(languageRequest);
   let route = mustThink ? "system-two" : decision.route;
   let reply = "";
   try {
@@ -1603,9 +1606,9 @@ async function handleComment(config, comment) {
     } else if (config.ollama.stream) {
       // 相づちは標準語の日本語なので、ほかの言語・方言で返すときは流さない。
       const filler = language ? null : startFiller(config, decision, timing);
-      reply = await speakSegments(config, streamReplySegments(config, comment.author, filtered.text, replyInfo, maxReplyChars), { before: filler, timing });
+      reply = await speakSegments(config, streamReplySegments(config, comment.author, filtered.text, { ...replyInfo, detailed }, maxReplyChars), { before: filler, timing });
     } else {
-      reply = trimReply(await askOllama(config, comment.author, filtered.text, replyInfo), maxReplyChars);
+      reply = trimReply(await askOllama(config, comment.author, filtered.text, { ...replyInfo, detailed }), maxReplyChars);
       const unsafe = isUnsafeReply(config, reply);
       if (unsafe) reply = SAFE_REPLY;
       await speakReply(config, reply, { cache: unsafe, timing });
@@ -2477,7 +2480,15 @@ function languageReplyPrompt(language, dialect) {
 // 日本語のコメントに英単語が混ざっているときの指示。返事の英単語は音声合成がうまく読めないので避けてもらう。
 const MIXED_ENGLISH_PROMPT = "コメントに英単語が混ざっていたら意味をくみ取ってください。返答は日本語で、英単語はそのまま書かずに日本語かカタカナで言い換えてください。";
 
-async function buildReplyPrompts(config, author, text, { service = "", eventNote = "", language = null, dialect = false } = {}) {
+// 説明や比較を求める質問だけ長めに答える。挨拶やギフトの即答はそのままにする。
+function needsDetailedAnswer(text) {
+  const value = String(text ?? "").trim();
+  if (!value) return false;
+  return /(詳しく|くわしく|具体的に|丁寧に|長めに|詳しい説明|理由も|根拠|仕組み|手順|比較|違い|メリット|デメリット|原理|影響|歴史|とは[？?]?|なぜ|どうして|どうやって|どのように|解説して|説明して|教えて.*(?:理由|方法|仕組み))/.test(value)
+    || (value.length >= 65 && /[？?]|(?:教えて|説明して|知りたい)/.test(value));
+}
+
+async function buildReplyPrompts(config, author, text, { service = "", eventNote = "", language = null, dialect = false, detailed = false } = {}) {
   await refreshMarkdownMemoryIfChanged(config);
   const longTermMemoryPrompt = formatLongTermMemory();
   const relevantFacts = relevantMemoryFacts(longTermMemoryText, text);
@@ -2492,12 +2503,13 @@ async function buildReplyPrompts(config, author, text, { service = "", eventNote
   const innerPrompt = buildInnerReactionPrompt();
   // 言語の指示はコメントのすぐ後ろに置く（前半を毎回同じにして、Ollama が計算を使い回せるようにするため）。
   const languageLine = language ? languageReplyPrompt(language, dialect) : MIXED_ENGLISH_PROMPT;
-  const retryLength = language ? `${language}で2文から3文くらいで` : "日本語で2文から4文くらいで";
+  const retryLength = detailed ? (language ? `${language}で5文から8文くらいで` : "日本語で5文から8文くらいで") : (language ? `${language}で2文から3文くらいで` : "日本語で2文から4文くらいで");
+  const detailLine = detailed ? "この質問は詳しい説明を求めています。短文という通常の指示よりこちらを優先し、最初に結論を述べ、理由・具体例・必要なら注意点まで5文から8文程度で分かりやすく答えてください。曖昧な相づちや引き延ばしは避けてください。\n" : "";
   // 答えの欄にも言語を書いておくと、小さいモデルでも指定の言語で書き始めやすい。
   const answerLabel = language ? `返答（${language}）` : "返答";
   return {
-    prompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n今回のコメントだけに自然に返してください。直前の話題は、コメントが明確に続きだと分かる時だけ使ってください。絵文字だけ、相づちだけ、定型文だけで終わらず、コメント内容に具体的に反応してください。\n\n${memoryPrompt}${currentDateTimeLine(config)}${nicknameLine}${eventLine}コメント: ${text}\n${relevantFactPrompt}\n${languageLine}\n${answerLabel}:`,
-    retryPrompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n次のコメントに${retryLength}具体的に返してください。定型文だけで終わらず、コメント内容に触れてください。\n${currentDateTimeLine(config)}コメント: ${text}\n${relevantFactPrompt}${languageLine}\n${answerLabel}:`
+    prompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n今回のコメントだけに自然に返してください。直前の話題は、コメントが明確に続きだと分かる時だけ使ってください。絵文字だけ、相づちだけ、定型文だけで終わらず、コメント内容に具体的に反応してください。\n\n${memoryPrompt}${currentDateTimeLine(config)}${nicknameLine}${eventLine}コメント: ${text}\n${relevantFactPrompt}\n${languageLine}\n${detailLine}${answerLabel}:`,
+    retryPrompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n次のコメントに${retryLength}具体的に返してください。定型文だけで終わらず、コメント内容に触れてください。\n${currentDateTimeLine(config)}コメント: ${text}\n${relevantFactPrompt}${languageLine}\n${detailLine}${answerLabel}:`
   };
 }
 
@@ -2506,9 +2518,9 @@ async function askOllama(config, author, text, commentInfo) {
   const timeout = setTimeout(() => controller.abort(), config.ollama.timeoutMs);
   try {
     const { prompt, retryPrompt } = await buildReplyPrompts(config, author, text, commentInfo);
-    const response = await generateOllamaReply(config, prompt, controller.signal);
+    const response = await generateOllamaReply(config, prompt, controller.signal, { numPredict: commentInfo.detailed ? Math.max(config.ollama.numPredict, 420) : undefined });
     if (response.trim()) return response;
-    return await generateOllamaReply(config, retryPrompt, controller.signal);
+    return await generateOllamaReply(config, retryPrompt, controller.signal, { numPredict: commentInfo.detailed ? Math.max(config.ollama.numPredict, 420) : undefined });
   } finally {
     clearTimeout(timeout);
   }
@@ -2523,7 +2535,7 @@ async function* streamReplySegments(config, author, text, commentInfo, maxReplyC
   try {
     const { prompt, retryPrompt } = await buildReplyPrompts(config, author, text, commentInfo);
     let blocked = false;
-    for await (const sentence of streamOllamaSentences(config, prompt, controller.signal)) {
+    for await (const sentence of streamOllamaSentences(config, prompt, controller.signal, commentInfo.detailed ? Math.max(config.ollama.numPredict, 420) : undefined)) {
       const cleaned = cleaner.push(sentence);
       if (cleaned && isUnsafeReply(config, cleaned)) {
         // 危ない文が出たら、その文は読まずに断りの一言に差し替えて、残りも捨てる。
@@ -2539,7 +2551,7 @@ async function* streamReplySegments(config, author, text, commentInfo, maxReplyC
       if (cleaner.full) break;
     }
     if (emitted === 0 && !blocked) {
-      const retry = await generateOllamaReply(config, retryPrompt, controller.signal);
+      const retry = await generateOllamaReply(config, retryPrompt, controller.signal, { numPredict: commentInfo.detailed ? Math.max(config.ollama.numPredict, 420) : undefined });
       for (const sentence of splitSentences(retry)) {
         const cleaned = cleaner.push(sentence);
         if (cleaned && isUnsafeReply(config, cleaned)) {
@@ -2567,11 +2579,11 @@ async function* streamReplySegments(config, author, text, commentInfo, maxReplyC
   if (emitted === 0) yield EMPTY_REPLY;
 }
 
-async function* streamOllamaSentences(config, prompt, signal) {
+async function* streamOllamaSentences(config, prompt, signal, numPredict) {
   const res = await fetch(`${config.ollama.endpoint}/api/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(buildOllamaRequest(config, prompt, { stream: true })),
+    body: JSON.stringify(buildOllamaRequest(config, prompt, { stream: true, numPredict })),
     signal
   });
   if (!res.ok) {

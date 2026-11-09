@@ -132,6 +132,7 @@
     "displayName": "Donguriko",
     "maxCommentLength": 160,
     "maxReplyChars": 110,
+    "detailedReplyChars": 320,
     "cooldownMs": 150,
     "maxQueueSize": 5,
     "replyLastCommentOnStartup": true,
