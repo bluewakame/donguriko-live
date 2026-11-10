@@ -28,6 +28,7 @@ def main() -> None:
 
     def synthesize_and_release(self, *args, **kwargs):
         cuda = torch.cuda.is_available()
+        mps = not cuda and torch.backends.mps.is_available()
         if cuda:
             torch.cuda.reset_peak_memory_stats()
         started = time.perf_counter()
@@ -42,6 +43,11 @@ def main() -> None:
                     f"[lowvram] {time.perf_counter() - started:.2f}s peak={peak_mb:.0f}MB kept={kept_mb:.0f}MB",
                     flush=True,
                 )
+            elif mps:
+                # Mac は GPU とメインメモリが共通なので、返さないと Ollama（Gemma）の分が減る。
+                torch.mps.empty_cache()
+                kept_mb = torch.mps.driver_allocated_memory() / 2**20
+                print(f"[lowvram] {time.perf_counter() - started:.2f}s kept={kept_mb:.0f}MB (mps)", flush=True)
 
     inference_runtime.InferenceRuntime.synthesize = synthesize_and_release
     app.main()

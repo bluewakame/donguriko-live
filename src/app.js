@@ -259,6 +259,23 @@ function normalizeBotConfig(config) {
   if (process.env.PORT) {
     config.server.port = Number(process.env.PORT);
   }
+  // Mac用の起動スクリプト（start-*.command）から渡される。
+  // Windowsと同じ config.json のまま、Macでは irodori-TTS の場所とデバイスだけ差し替える。
+  if (process.env.IRODORI_DIR || process.env.IRODORI_DEVICE) {
+    config.tts = config.tts ?? {};
+    config.tts.gradio = config.tts.gradio ?? {};
+    const gradio = config.tts.gradio;
+    if (process.env.IRODORI_DIR && !gradio.appRoot) gradio.appRoot = process.env.IRODORI_DIR;
+    if (process.env.IRODORI_DEVICE) {
+      gradio.modelDevice = process.env.IRODORI_DEVICE;
+      gradio.codecDevice = process.env.IRODORI_DEVICE;
+      // Mac の GPU（mps）は fp32 しか選べない。Windows用の bf16 が入っていても動くようにする。
+      if (process.env.IRODORI_DEVICE === "mps") {
+        gradio.modelPrecision = "fp32";
+        gradio.codecPrecision = "fp32";
+      }
+    }
+  }
   if (!Number.isInteger(config.server.port) || config.server.port <= 0) {
     throw new Error(`Invalid server port: ${config.server.port}`);
   }

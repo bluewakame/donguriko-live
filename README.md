@@ -44,6 +44,51 @@ start-test.bat
 node src/app.js
 ```
 
+## Macで動かす
+
+Apple Silicon の Mac でも動きます（M1・メモリ16GBで確認）。ただし声を作る irodori-TTS が Mac の GPU では fp32 しか使えないため、コメントから声が出るまで1分以上かかることがあります。配信の本番より、動作確認や開発に向いています。
+
+### 用意するもの
+
+1. **Node.js 20以上**
+2. **Ollama**：[ollama.com/download](https://ollama.com/download) から入れます。モデルは起動スクリプトが `config.json` の `ollama.model` を見て、なければダウンロードします。メモリ16GBなら `gemma4:e2b` がおすすめです。
+3. **irodori-TTS**：ホームフォルダに v3 を置きます（ボットは v3 の VoiceDesign モデルを使います）。
+
+   ```bash
+   cd ~
+   git clone --branch v3 --depth 1 https://github.com/Aratako/Irodori-TTS.git
+   cd Irodori-TTS
+   uv sync --extra cpu
+   ```
+
+   `--extra cpu` でも Mac では GPU（mps）が使える PyTorch が入ります。初回の起動時に音声モデルをダウンロードします。
+4. **わんコメ**（YouTube のコメントを拾う場合）：Mac版を `/Applications` に入れます。TikTok だけなら不要です。
+
+### 起動
+
+Finder で次のファイルをダブルクリックします。ターミナルが開いて、Windowsの `.bat` と同じ順番で確認・起動します。
+
+| ファイル | 内容 |
+| --- | --- |
+| `start-live.command` | Ollama・irodori-TTS・わんコメを確認して配信ボットを起動 |
+| `start-tiktok.command` | TikTok LIVE のコメントだけで起動（わんコメなし） |
+| `start-test.command` | 配信につながずに動作確認だけ |
+
+- OBS の URL はターミナルに出ます（`OBS URL:` の行。普段は 8790）。
+- Ollama と irodori-TTS は裏で動き続けます。ログは `runtime/logs/` にあります。
+- 声を OBS に乗せるには、`config.json` の `audio.playInBrowser` を `true` にして、ブラウザソースの「音声をOBSで制御する」を有効にしてください。`false` のままだと、声は Mac のスピーカーから直接鳴ります（`afplay`）。
+
+### 設定
+
+`config.json` は Windows と同じものが使えます。起動スクリプトが次の2つを環境変数でボットに渡すので、書き換えは不要です。
+
+| 環境変数 | 既定値 | 内容 |
+| --- | --- | --- |
+| `IRODORI_DIR` | `~/Irodori-TTS` | irodori-TTS の場所。`tts.gradio.appRoot` が空のときに使う |
+| `IRODORI_DEVICE` | `mps` | irodori-TTS のデバイス。`mps` のときは精度も `fp32` にする。CPUで動かすなら `cpu` |
+
+声が遅すぎるときは、`tts.gradio.numSteps` を `40` から `20` くらいに下げると速くなります（音質は少し落ちます）。
+
 ## OBS URL
 
 `start-live.bat` は 8790〜8899 の中から空いているポートを探して起動し、実際のURLを画面に表示します（`OBS URL:` / `OBS vertical URL:` の行）。普段は 8790 になります。
