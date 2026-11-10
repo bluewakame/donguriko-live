@@ -3185,8 +3185,12 @@ function playWavOnce(wavPath) {
     `$p = New-Object System.Media.SoundPlayer '${wavPath.replaceAll("'", "''")}';`,
     "$p.PlaySync();"
   ].join(" ");
+  // Mac には PowerShell がないので、標準の afplay で鳴らす（終わるまで待つ）。
+  const [program, args] = process.platform === "darwin"
+    ? ["afplay", [wavPath]]
+    : ["powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command]];
   return new Promise((resolve) => {
-    const child = spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command], {
+    const child = spawn(program, args, {
       windowsHide: true,
       stdio: "ignore"
     });
