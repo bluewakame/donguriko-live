@@ -1,0 +1,24 @@
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:#171415;color:#fff;font-family:"Yu Gothic UI","Hiragino Kaku Gothic ProN",sans-serif}
+body{display:flex;align-items:center;justify-content:center;gap:28px;padding:24px}
+.stage{position:relative;width:min(56.25vh,540px);height:min(calc(100vh - 48px),960px);aspect-ratio:9/16;overflow:hidden;isolation:isolate;background:#332c2b;box-shadow:0 22px 80px #0008}
+.scene-video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.action-video{z-index:1;opacity:0;pointer-events:none;transition:opacity .16s ease-out}
+.stage.scene-active .action-video{opacity:1}
+.shade{position:absolute;inset:0;z-index:2;pointer-events:none;background:linear-gradient(180deg,#17111766,transparent 20%,transparent 60%,#0d0b12bb)}
+.top,.message,footer,.side{position:absolute;z-index:4}
+.top{top:0;left:0;right:0;padding:5.8% 5%;display:flex;justify-content:space-between;align-items:center}
+.identity{display:flex;gap:10px;align-items:center;text-shadow:0 1px 8px #0009}.identity strong{display:block;font-size:14px;letter-spacing:.16em}.identity small{display:block;font-size:10px;opacity:.8;margin-top:2px}
+.avatar-dot{display:grid;place-items:center;width:38px;height:38px;border-radius:50%;background:#ffffff35;border:1px solid #fff8;backdrop-filter:blur(12px);color:#ffe5dc}
+.live-pill{display:flex;align-items:center;gap:6px;padding:7px 10px;border-radius:6px;background:#ed426b;font-weight:800;font-size:11px;letter-spacing:.12em;box-shadow:0 4px 15px #bd164458}.live-pill i{width:6px;height:6px;background:#fff;border-radius:50%;animation:pulse 1.4s infinite}
+.side{right:4%;top:48%;display:grid;gap:15px;text-align:center;text-shadow:0 2px 8px #000a;font-size:27px}.side span{display:grid}.side small{font-size:9px;letter-spacing:.1em}
+.message{left:5%;right:5%;top:12%;display:flex;align-items:center;gap:14px;padding:18px;border:1px solid #fff5;border-radius:19px;background:#18101fb5;backdrop-filter:blur(18px);box-shadow:0 15px 40px #0005;transition:background .4s,box-shadow .4s}
+.stage:not([data-reaction=idle]) .message{background:#322147bd;box-shadow:0 0 28px #ffd7ee66,0 15px 40px #0007}
+.gift-icon{flex:none;width:54px;height:54px;display:grid;place-items:center;border-radius:14px;background:#fff3;font-size:30px;box-shadow:inset 0 0 0 1px #fff5}
+.message-copy{min-width:0}.eyebrow{font-size:14px;letter-spacing:.12em;color:#ffdfd4;font-weight:800}.headline{font-size:22px;font-weight:800;margin-top:3px;text-shadow:0 1px 8px #0009}.subline{font-size:16px;opacity:.9;margin-top:4px;overflow-wrap:anywhere}
+footer{left:5%;right:5%;bottom:4.4%;display:flex;align-items:center;justify-content:space-between;font-size:10px;letter-spacing:.1em;font-weight:700}.now{display:flex;align-items:center;gap:6px}.separator{opacity:.5}.equalizer{display:flex;align-items:end;height:12px;gap:2px}.equalizer i{width:2px;background:#ffd3c8;height:7px;animation:bars .7s ease-in-out infinite alternate}.equalizer i:nth-child(2){animation-delay:.18s}.equalizer i:nth-child(3){animation-delay:.36s}.equalizer i:nth-child(4){animation-delay:.09s}.heart-trail{font-size:14px;color:#ffb9c9}
+.particles{position:absolute;inset:0;z-index:3;pointer-events:none}.particle{position:absolute;left:var(--x);bottom:-6%;font-size:var(--s);color:var(--c);filter:drop-shadow(0 0 8px currentColor);animation:floatUp var(--d) linear forwards;animation-delay:var(--delay)}
+.controls{width:175px;display:grid;gap:8px}.controls b{font-size:14px;margin-bottom:5px}.controls button{border:1px solid #ffffff30;background:#ffffff17;color:white;border-radius:9px;padding:10px;text-align:left;cursor:pointer}.controls button:hover{background:#ffffff3b}.controls small{line-height:1.5;color:#ccc;margin-top:9px}
+body.obs{padding:0;background:transparent}body.obs .stage{width:100vw;height:100vh;box-shadow:none}body.obs .controls{display:none}
+@keyframes pulse{50%{opacity:.3;transform:scale(.7)}}@keyframes bars{to{height:12px}}@keyframes floatUp{0%{transform:translateY(0) rotate(0) scale(.7);opacity:0}10%{opacity:1}85%{opacity:.9}100%{transform:translateY(-110vh) rotate(240deg) scale(1.2);opacity:0}}
+@media(max-width:760px){body{display:block;padding:0}.stage{width:100vw;height:100dvh;box-shadow:none}.controls{position:fixed;z-index:10;bottom:0;left:0;right:0;width:auto;display:flex;overflow:auto;padding:8px;background:#171415d9}.controls b,.controls small{display:none}.controls button{white-space:nowrap;flex:none}.message{top:14%}}
+@media(prefers-reduced-motion:reduce){.live-pill i,.equalizer i,.particle{animation:none}.action-video{transition:none}}

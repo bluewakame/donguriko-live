@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="ja">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Donguriko Live</title><link rel="stylesheet" href="style.css?v=scenes2"></head>
+<body>
+<main id="stage" class="stage" data-reaction="idle">
+  <video id="idleVideo" class="scene-video" autoplay muted loop playsinline preload="auto" aria-label="配信アバター"><source src="scene-idle.mp4" type="video/mp4"></video>
+  <video id="actionVideo" class="scene-video action-video" muted playsinline preload="auto" aria-hidden="true"></video>
+  <div class="shade"></div><div id="particles" class="particles"></div>
+  <header class="top"><div class="identity"><span class="avatar-dot">✦</span><span><strong>LIVE ROOM</strong><small>ありがとうを届ける時間</small></span></div><span class="live-pill"><i></i> LIVE</span></header>
+  <div class="side"><span>♡<small id="likes">2.4k</small></span><span>✦<small>GIFT</small></span></div>
+  <section class="message"><div id="giftIcon" class="gift-icon">♡</div><div class="message-copy"><div class="eyebrow" id="giftFrom">WELCOME</div><div class="headline" id="giftTitle">遊びに来てくれてありがとう</div><div class="subline" id="giftLine">コメントやギフトに反応します</div></div></section>
+  <footer><div class="now"><span class="equalizer"><i></i><i></i><i></i><i></i></span> NOW LIVE <span class="separator">/</span> <span id="modeLabel">ゆったり配信中</span></div><div class="heart-trail">♥　✦　♥</div></footer>
+</main>
+<aside class="controls"><b>映像プレビュー</b><button data-preview="welcome">👋 新しい視聴者</button><button data-preview="rose">🌹 バラ</button><button data-preview="heart">♡ ハート</button><button data-preview="fireworks">✺ 花火</button><button data-preview="universe">✧ ユニバース</button><button data-preview="speaking">💬 会話</button><button data-preview="idle">リセット</button><small>OBS: 1080×1920、?obs=1</small></aside>
+<script src="app.js?v=scenes2"></script>
+</body></html>

@@ -1,11 +1,12 @@
 import { createServer } from "node:http";
 import { readFile, writeFile, appendFile, mkdir, copyFile, stat, rm, rename } from "node:fs/promises";
 import { existsSync, createWriteStream } from "node:fs";
-import { join, resolve, extname, basename, sep } from "node:path";
+import { join, resolve, isAbsolute, extname, basename, sep } from "node:path";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { createSystemOne } from "./system-one.js";
+import { relevantMemoryFacts, directMemoryReply } from "./memory-relevance.js";
 import { findUnsafeReason, isDistress, DISTRESS_REPLY, SAFE_REPLY, SAFETY_PROMPT } from "./safety.js";
 import { normalizeTikTokConfig, runTikTokLoop } from "./tiktok.js";
 import { isEnglishComment, joinSentences, parseLanguageRequest, toJapaneseReading } from "./language.js";
@@ -98,6 +99,8 @@ let state = {
   commentAuthor: "",
   commentService: "",
   commentText: "",
+  commentId: "",
+  commentKind: "",
   replyText: "起動中だよ",
   isSpeaking: false,
   lastError: "",
@@ -184,7 +187,7 @@ async function main() {
 // TikTok は YouTube（わんコメ）と並行して直接つなぐ。どちらのコメントも同じキューに入る。
 function startTikTok(config) {
   runTikTokLoop(config, {
-    onComment: (comment) => enqueueComment(config, comment, { replacePending: true }),
+    onComment: (comment) => enqueueComment(config, comment, { replacePending: comment.kind !== "viewer-enter" }),
     onStatus: (tiktokStatus, error) => publish({ tiktokStatus, ...(error ? { lastError: `TikTok: ${error}` } : {}) })
   }).catch((error) => {
     console.warn(`[TikTok] 停止しました: ${error.message}`);
@@ -298,6 +301,7 @@ function normalizeBotConfig(config) {
   config.bot.displayName = config.bot.displayName ?? "どんぐりこ";
   config.bot.maxCommentLength = config.bot.maxCommentLength ?? 160;
   config.bot.maxReplyChars = config.bot.maxReplyChars ?? 180;
+  config.bot.detailedReplyChars = Math.max(config.bot.maxReplyChars, Number(config.bot.detailedReplyChars ?? 320));
   config.bot.cooldownMs = config.bot.cooldownMs ?? 1000;
   config.bot.maxQueueSize = Math.max(1, Number(config.bot.maxQueueSize ?? 5));
   config.bot.replyLastCommentOnStartup = config.bot.replyLastCommentOnStartup ?? true;
@@ -372,7 +376,8 @@ function startUiServer(config) {
     if (url.pathname === "/state") return sendJson(res, state);
     if (url.pathname === "/manual-speak" && req.method === "POST") return handleManualSpeak(req, res, config);
     if (url.pathname === "/audio/last.wav") return serveAudio(res);
-    if (url.pathname === "/vertical") return serveStatic("/index.html", res);
+    if (url.pathname === "/vertical") { res.writeHead(302, { Location: "/gift-live/index.html?obs=1" }); res.end(); return; }
+    if (url.pathname === "/") { res.writeHead(302, { Location: "/gift-live/index.html" }); res.end(); return; }
     const path = url.pathname === "/" ? "/index.html" : url.pathname;
     await serveStatic(path, res);
   });
@@ -984,7 +989,7 @@ function pickLatestOneCommeComment(items) {
 function enqueueComment(config, comment, { force = false, replacePending = false } = {}) {
   markActivity();
   comment = { ...comment, author: safeAuthorName(config, comment.author) };
-  if (!String(comment.id ?? "").startsWith("startup-last:")) {
+  if (comment.kind !== "viewer-enter" && !String(comment.id ?? "").startsWith("startup-last:")) {
     rememberLastComment(config, comment).catch((error) => {
       console.warn(`最後のコメント保存に失敗しました: ${error.message}`);
     });
@@ -1509,6 +1514,22 @@ async function resolveLiveChatId(config) {
   throw new Error("有効な自分のライブ配信が見つかりません。配信を開始するか broadcastId を設定してください。");
 }
 
+const FAST_GIFT_REPLIES = {
+  rose: "バラありがとう！とってもうれしいよ。",
+  heart: "ハートありがとう！私からもハートを送るね。",
+  celebration: "すごいギフトありがとう！一緒に盛り上がろう。",
+  universe: "えっ、ユニバース！？本当にありがとう！",
+  other: "ギフトありがとう！すっごくうれしいよ。"
+};
+
+function fastGiftReply(text) {
+  if (!String(text).startsWith("ギフト「")) return "";
+  if (/ユニバース|ギャラクシー|ロケット|プライベートジェット|インターステラー/.test(text)) return FAST_GIFT_REPLIES.universe;
+  if (/花火|紙吹雪|王冠|マネーガン/.test(text)) return FAST_GIFT_REPLIES.celebration;
+  if (/バラ|ローザ/.test(text)) return FAST_GIFT_REPLIES.rose;
+  if (/ハート|ラブユー/.test(text)) return FAST_GIFT_REPLIES.heart;
+  return FAST_GIFT_REPLIES.other;
+}
 async function handleComment(config, comment) {
   const filtered = filterComment(config, comment.text);
   if (!filtered.ok) {
@@ -1524,6 +1545,8 @@ async function handleComment(config, comment) {
     commentAuthor: comment.author,
     commentService: platformLabel(comment.service),
     commentText: filtered.text,
+    commentId: comment.id || filteredKey,
+    commentKind: comment.kind || "",
     replyText: "考え中だよ...",
     isSpeaking: false,
     lastError: ""
@@ -1547,15 +1570,49 @@ async function handleComment(config, comment) {
   const foreign = Boolean(language) && !dialect;
   const replyInfo = { ...comment, language, dialect };
   // 外国語は同じ内容でも文字数が多いので、返事の長さの上限を広げる。
-  const maxReplyChars = foreign ? Math.round(config.bot.maxReplyChars * 2.5) : config.bot.maxReplyChars;
+  const detailed = needsDetailedAnswer(filtered.text) && !comment.eventNote;
+  const baseReplyChars = detailed ? config.bot.detailedReplyChars : config.bot.maxReplyChars;
+  const maxReplyChars = foreign ? Math.round(baseReplyChars * 2.5) : baseReplyChars;
   // ギフトやフォロー、言語の指定があるときは、即答・定型文・天気（どれも標準語の日本語）に回さず必ず LLM に考えさせる。
-  const mustThink = Boolean(comment.eventNote) || Boolean(language) || Boolean(languageRequest);
+  const mustThink = detailed || Boolean(comment.eventNote) || Boolean(language) || Boolean(languageRequest);
   let route = mustThink ? "system-two" : decision.route;
   let reply = "";
   try {
+    const viewerFast = comment.kind === "viewer-enter" ? comment.author + "さん、いらっしゃい！" : "";
+    const giftFast = comment.service === "tiktok" && !language && !languageRequest ? fastGiftReply(filtered.text) : "";
+    await refreshMarkdownMemoryIfChanged(config);
+    const memoryDirect = !mustThink ? directMemoryReply(longTermMemoryText, filtered.text) : "";
     const canned = mustThink ? undefined : makeCannedReply(filtered.text);
-    const toolReply = canned || mustThink ? undefined : await makeToolReply(config, filtered.text);
-    if (canned || toolReply) {
+    const toolReply = canned || mustThink || memoryDirect || viewerFast ? undefined : await makeToolReply(config, filtered.text);
+    if (viewerFast) {
+      route = "viewer-fast";
+      reply = viewerFast;
+      await speakReply(config, reply, { cache: true, timing });
+    } else if (giftFast) {
+      route = "gift-fast";
+      reply = giftFast;
+      const nameLine = `${comment.author}さん、ありがとう！`;
+      // 初回でもお礼音声を先に生成し、その間に名前の音声も用意する。
+      const giftAudio = synthesizeForSpeech(config, reply, { cache: true }).catch((error) => {
+        publish({ lastError: error.message });
+        return "";
+      });
+      const nameAudio = synthesizeForSpeech(config, nameLine, { cache: true }).catch((error) => {
+        publish({ lastError: error.message });
+        return "";
+      });
+      const giftWav = await giftAudio;
+      if (giftWav) await playSegment(config, giftWav, reply, timing);
+      const nameWav = await nameAudio;
+      if (nameWav) {
+        reply = joinSentences(reply, nameLine);
+        await playSegment(config, nameWav, reply, timing);
+      }
+    } else if (memoryDirect) {
+      route = "memory-direct";
+      reply = memoryDirect;
+      await speakReply(config, reply, { cache: true, timing });
+    } else if (canned || toolReply) {
       route = canned ? "canned" : "tool";
       // 定型文は trimReply を通すと「どんぐりこだよ。」が自己紹介除去で消えてしまうのでそのまま使う。
       reply = canned ?? trimReply(toolReply, config.bot.maxReplyChars);
@@ -1566,9 +1623,9 @@ async function handleComment(config, comment) {
     } else if (config.ollama.stream) {
       // 相づちは標準語の日本語なので、ほかの言語・方言で返すときは流さない。
       const filler = language ? null : startFiller(config, decision, timing);
-      reply = await speakSegments(config, streamReplySegments(config, comment.author, filtered.text, replyInfo, maxReplyChars), { before: filler, timing });
+      reply = await speakSegments(config, streamReplySegments(config, comment.author, filtered.text, { ...replyInfo, detailed }, maxReplyChars), { before: filler, timing });
     } else {
-      reply = trimReply(await askOllama(config, comment.author, filtered.text, replyInfo), maxReplyChars);
+      reply = trimReply(await askOllama(config, comment.author, filtered.text, { ...replyInfo, detailed }), maxReplyChars);
       const unsafe = isUnsafeReply(config, reply);
       if (unsafe) reply = SAFE_REPLY;
       await speakReply(config, reply, { cache: unsafe, timing });
@@ -1579,7 +1636,7 @@ async function handleComment(config, comment) {
     await speakReply(config, reply, { cache: true, timing });
   }
   reportLatency(route, decision, timing);
-  await rememberTurn(config, { author: comment.author, text: filtered.text }, reply);
+  if (comment.kind !== "viewer-enter") await rememberTurn(config, { author: comment.author, text: filtered.text }, reply);
 
   publish({ status: "listening", isSpeaking: false });
   await sleep(config.bot.cooldownMs);
@@ -1751,9 +1808,10 @@ async function playSegment(config, wavPath, displayText, timing, { onStart } = {
       isSpeaking: true,
       audioToken: `${Date.now()}-${++audioTokenCounter}`,
       audioMs: lipSync.durationMs,
-      // ブラウザで再生するときは再生中の音量から口を動かすので包絡線は送らない
-      mouthEnvelope: useBrowserAudio ? [] : lipSync.envelope,
-      mouthFrameMs: useBrowserAudio ? 0 : lipSync.frameMs,
+      // ブラウザ音声がブロックされても口が止まらないよう、包絡線は常に送る。
+      browserAudio: useBrowserAudio,
+      mouthEnvelope: lipSync.envelope,
+      mouthFrameMs: lipSync.frameMs,
       lipSyncOffsetMs: useBrowserAudio ? 0 : config.audio.lipSyncOffsetMs
     });
   };
@@ -1833,6 +1891,7 @@ async function warmUpOllama(config) {
 // 即答・相づち・定型文の音声を先に合成してディスクに保存しておく。コメント処理中は合成しない。
 async function prewarmTtsCache(config, { quiet = true } = {}) {
   const phrases = [...new Set([
+    ...Object.values(FAST_GIFT_REPLIES),
     ...systemOne.allPhrases(),
     NAME_REPLY,
     MODEL_REPLY,
@@ -1877,6 +1936,7 @@ function ttsCachePath(config, text) {
 }
 
 // キャッシュがあれば合成を省く。cache=true の時だけ新しく作った音声をキャッシュへ保存する。
+const pendingTtsCache = new Map();
 async function synthesizeForSpeech(config, text, { cache = false } = {}) {
   const cachePath = ttsCachePath(config, text);
   if (existsSync(cachePath)) return cachePath;
@@ -1884,10 +1944,15 @@ async function synthesizeForSpeech(config, text, { cache = false } = {}) {
     const segmentPath = join(TTS_SEGMENT_DIR, `segment-${ttsSegmentCounter++ % TTS_SEGMENT_SLOTS}.wav`);
     return synthesizeVoice(config, text, segmentPath);
   }
-  const tmpPath = `${cachePath}.${process.pid}.tmp`;
-  await synthesizeVoice(config, text, tmpPath);
-  await rename(tmpPath, cachePath);
-  return cachePath;
+  if (pendingTtsCache.has(cachePath)) return pendingTtsCache.get(cachePath);
+  const work = (async () => {
+    const tmpPath = `${cachePath}.${process.pid}.tmp`;
+    await synthesizeVoice(config, text, tmpPath);
+    await rename(tmpPath, cachePath);
+    return cachePath;
+  })();
+  pendingTtsCache.set(cachePath, work);
+  try { return await work; } finally { pendingTtsCache.delete(cachePath); }
 }
 
 function makeCannedReply(text) {
@@ -2275,14 +2340,20 @@ function resolveProjectFilePath(value, fallback) {
   return fullPath;
 }
 
+function resolveMarkdownMemoryPath(config) {
+  const path = String(config.memory.markdown.path || DEFAULT_MARKDOWN_MEMORY_PATH);
+  return isAbsolute(path) ? path : resolveProjectFilePath(path, DEFAULT_MARKDOWN_MEMORY_PATH);
+}
+
 async function loadMarkdownMemory(config) {
   if (!config.memory?.enabled || !config.memory.markdown?.enabled) return "";
-  const memoryPath = resolveProjectFilePath(config.memory.markdown.path, DEFAULT_MARKDOWN_MEMORY_PATH);
+  const memoryPath = resolveMarkdownMemoryPath(config);
   try {
     const fileStat = await stat(memoryPath);
     const raw = await readFile(memoryPath, "utf8");
     const trimmed = raw.trim();
     longTermMemoryMtimeMs = fileStat.mtimeMs;
+    console.log(`Markdown記憶: ${memoryPath} (${trimmed.length}文字)`);
     if (!trimmed) return "";
     const maxChars = config.memory.markdown.maxChars;
     return maxChars > 0 ? trimmed.slice(0, maxChars) : trimmed;
@@ -2294,7 +2365,7 @@ async function loadMarkdownMemory(config) {
 
 async function refreshMarkdownMemoryIfChanged(config) {
   if (!config.memory?.enabled || !config.memory.markdown?.enabled || !config.memory.markdown.reloadOnChange) return;
-  const memoryPath = resolveProjectFilePath(config.memory.markdown.path, DEFAULT_MARKDOWN_MEMORY_PATH);
+  const memoryPath = resolveMarkdownMemoryPath(config);
   try {
     const fileStat = await stat(memoryPath);
     if (fileStat.mtimeMs <= longTermMemoryMtimeMs) return;
@@ -2360,7 +2431,7 @@ function hasContextReference(text) {
 function formatLongTermMemory() {
   if (!longTermMemoryText) return "";
   return [
-    "Dongurikoの長期記憶メモです。性格、好み、配信方針の参考として必要な部分だけ自然に反映してください。",
+    "Dongurikoの長期記憶メモです。自分の年齢・好み・設定について明記された内容は、質問された時の答えとして優先してください。",
     "メモの文章をそのままコピーせず、今回のコメントに関係する内容だけを使ってください。",
     "同じ言葉、同じ語尾、同じ口癖を繰り返さないでください。",
     "ただし、メモを読んだことやファイル名は返答に出さないでください。",
@@ -2426,9 +2497,21 @@ function languageReplyPrompt(language, dialect) {
 // 日本語のコメントに英単語が混ざっているときの指示。返事の英単語は音声合成がうまく読めないので避けてもらう。
 const MIXED_ENGLISH_PROMPT = "コメントに英単語が混ざっていたら意味をくみ取ってください。返答は日本語で、英単語はそのまま書かずに日本語かカタカナで言い換えてください。";
 
-async function buildReplyPrompts(config, author, text, { service = "", eventNote = "", language = null, dialect = false } = {}) {
+// 説明や比較を求める質問だけ長めに答える。挨拶やギフトの即答はそのままにする。
+function needsDetailedAnswer(text) {
+  const value = String(text ?? "").trim();
+  if (!value) return false;
+  return /(詳しく|くわしく|具体的に|丁寧に|長めに|詳しい説明|理由も|根拠|仕組み|手順|比較|違い|メリット|デメリット|原理|影響|歴史|とは[？?]?|なぜ|どうして|どうやって|どのように|解説して|説明して|教えて.*(?:理由|方法|仕組み))/.test(value)
+    || (value.length >= 65 && /[？?]|(?:教えて|説明して|知りたい)/.test(value));
+}
+
+async function buildReplyPrompts(config, author, text, { service = "", eventNote = "", language = null, dialect = false, detailed = false } = {}) {
   await refreshMarkdownMemoryIfChanged(config);
   const longTermMemoryPrompt = formatLongTermMemory();
+  const relevantFacts = relevantMemoryFacts(longTermMemoryText, text);
+  const relevantFactPrompt = relevantFacts.length
+    ? `今回の質問に関係するどんぐりこの記憶:\n${relevantFacts.join("\n")}\n自分の年齢・好み・設定を直接聞かれたら、このキャラクター設定の答えを一文目で伝えてください。一般論や聞き返しで避けないでください。\n`
+    : "";
   const memoryPrompt = formatShortTermMemory(config, author, text);
   const nickname = sanitizeNickname(author);
   const platform = platformLabel(service);
@@ -2437,12 +2520,13 @@ async function buildReplyPrompts(config, author, text, { service = "", eventNote
   const innerPrompt = buildInnerReactionPrompt();
   // 言語の指示はコメントのすぐ後ろに置く（前半を毎回同じにして、Ollama が計算を使い回せるようにするため）。
   const languageLine = language ? languageReplyPrompt(language, dialect) : MIXED_ENGLISH_PROMPT;
-  const retryLength = language ? `${language}で2文から3文くらいで` : "日本語で2文から4文くらいで";
+  const retryLength = detailed ? (language ? `${language}で5文から8文くらいで` : "日本語で5文から8文くらいで") : (language ? `${language}で2文から3文くらいで` : "日本語で2文から4文くらいで");
+  const detailLine = detailed ? "この質問は詳しい説明を求めています。短文という通常の指示よりこちらを優先し、最初に結論を述べ、理由・具体例・必要なら注意点まで5文から8文程度で分かりやすく答えてください。曖昧な相づちや引き延ばしは避けてください。\n" : "";
   // 答えの欄にも言語を書いておくと、小さいモデルでも指定の言語で書き始めやすい。
   const answerLabel = language ? `返答（${language}）` : "返答";
   return {
-    prompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n今回のコメントだけに自然に返してください。直前の話題は、コメントが明確に続きだと分かる時だけ使ってください。絵文字だけ、相づちだけ、定型文だけで終わらず、コメント内容に具体的に反応してください。\n\n${memoryPrompt}${currentDateTimeLine(config)}${nicknameLine}${eventLine}コメント: ${text}\n${languageLine}\n${answerLabel}:`,
-    retryPrompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n次のコメントに${retryLength}具体的に返してください。定型文だけで終わらず、コメント内容に触れてください。\n${currentDateTimeLine(config)}コメント: ${text}\n${languageLine}\n${answerLabel}:`
+    prompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n今回のコメントだけに自然に返してください。直前の話題は、コメントが明確に続きだと分かる時だけ使ってください。絵文字だけ、相づちだけ、定型文だけで終わらず、コメント内容に具体的に反応してください。\n\n${memoryPrompt}${currentDateTimeLine(config)}${nicknameLine}${eventLine}コメント: ${text}\n${relevantFactPrompt}\n${languageLine}\n${detailLine}${answerLabel}:`,
+    retryPrompt: `${config.bot.systemPrompt}\n${SAFETY_PROMPT}\n${KNOWLEDGE_PROMPT}\n${longTermMemoryPrompt}\n${innerPrompt}\n次のコメントに${retryLength}具体的に返してください。定型文だけで終わらず、コメント内容に触れてください。\n${currentDateTimeLine(config)}コメント: ${text}\n${relevantFactPrompt}${languageLine}\n${detailLine}${answerLabel}:`
   };
 }
 
@@ -2451,9 +2535,9 @@ async function askOllama(config, author, text, commentInfo) {
   const timeout = setTimeout(() => controller.abort(), config.ollama.timeoutMs);
   try {
     const { prompt, retryPrompt } = await buildReplyPrompts(config, author, text, commentInfo);
-    const response = await generateOllamaReply(config, prompt, controller.signal);
+    const response = await generateOllamaReply(config, prompt, controller.signal, { numPredict: commentInfo.detailed ? Math.max(config.ollama.numPredict, 420) : undefined });
     if (response.trim()) return response;
-    return await generateOllamaReply(config, retryPrompt, controller.signal);
+    return await generateOllamaReply(config, retryPrompt, controller.signal, { numPredict: commentInfo.detailed ? Math.max(config.ollama.numPredict, 420) : undefined });
   } finally {
     clearTimeout(timeout);
   }
@@ -2468,7 +2552,7 @@ async function* streamReplySegments(config, author, text, commentInfo, maxReplyC
   try {
     const { prompt, retryPrompt } = await buildReplyPrompts(config, author, text, commentInfo);
     let blocked = false;
-    for await (const sentence of streamOllamaSentences(config, prompt, controller.signal)) {
+    for await (const sentence of streamOllamaSentences(config, prompt, controller.signal, commentInfo.detailed ? Math.max(config.ollama.numPredict, 420) : undefined)) {
       const cleaned = cleaner.push(sentence);
       if (cleaned && isUnsafeReply(config, cleaned)) {
         // 危ない文が出たら、その文は読まずに断りの一言に差し替えて、残りも捨てる。
@@ -2484,7 +2568,7 @@ async function* streamReplySegments(config, author, text, commentInfo, maxReplyC
       if (cleaner.full) break;
     }
     if (emitted === 0 && !blocked) {
-      const retry = await generateOllamaReply(config, retryPrompt, controller.signal);
+      const retry = await generateOllamaReply(config, retryPrompt, controller.signal, { numPredict: commentInfo.detailed ? Math.max(config.ollama.numPredict, 420) : undefined });
       for (const sentence of splitSentences(retry)) {
         const cleaned = cleaner.push(sentence);
         if (cleaned && isUnsafeReply(config, cleaned)) {
@@ -2512,11 +2596,11 @@ async function* streamReplySegments(config, author, text, commentInfo, maxReplyC
   if (emitted === 0) yield EMPTY_REPLY;
 }
 
-async function* streamOllamaSentences(config, prompt, signal) {
+async function* streamOllamaSentences(config, prompt, signal, numPredict) {
   const res = await fetch(`${config.ollama.endpoint}/api/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(buildOllamaRequest(config, prompt, { stream: true })),
+    body: JSON.stringify(buildOllamaRequest(config, prompt, { stream: true, numPredict })),
     signal
   });
   if (!res.ok) {

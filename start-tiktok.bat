@@ -7,7 +7,7 @@ set "IRODORI_DIR=%USERPROFILE%\Irodori-TTS"
 set "IRODORI_PYTHON=%USERPROFILE%\Irodori-TTS\.venv\Scripts\python.exe"
 set "IRODORI_APP=%USERPROFILE%\Irodori-TTS\gradio_app_voicedesign.py"
 set "OLLAMA_MODELS=C:\Users\Public\OllamaModels"
-set "OLLAMA_MODEL=gemma4:e4b"
+set "OLLAMA_MODEL=gemma4:e2b"
 set "OLLAMA_EXE=%LOCALAPPDATA%\Programs\Ollama\ollama.exe"
 if not exist "%OLLAMA_MODELS%" mkdir "%OLLAMA_MODELS%" >nul 2>nul
 
@@ -16,6 +16,12 @@ if errorlevel 1 (
   echo config.json tiktok.uniqueId is empty. Put your TikTok user name ^(after @^) there.
   pause
   exit /b 1
+)
+
+call :CheckHttp "http://127.0.0.1:8790/state" 2
+if not errorlevel 1 (
+  echo Live bot is already running at http://127.0.0.1:8790
+  exit /b 0
 )
 
 echo [1/4] Checking Node.js...
@@ -54,9 +60,9 @@ call :CheckIrodoriApi
 if errorlevel 1 echo irodori-TTS is not fully ready yet. Voice may start working after it finishes loading.
 
 echo [4/4] Starting live bot (TikTok only)...
-call :FindFreeUiPort 8790 8899
+call :FindFreeUiPort 8790 8790
 if errorlevel 1 (
-  echo Could not find a free UI port between 8790 and 8899.
+  echo Port 8790 is already in use. Stop the other process or use the running bot.
   pause
   exit /b 1
 )
